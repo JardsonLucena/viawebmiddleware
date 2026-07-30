@@ -59,6 +59,8 @@ const emptyDashboard: Dashboard = {
 
 declare global {
   interface Window {
+    AudioContext?: typeof AudioContext;
+    webkitAudioContext?: typeof AudioContext;
     ISScustomAPI?: {
       onSetup?: (callback: (settings: string) => void) => void;
       sendReact: (type: string, id: string, action: string, params: string) => void;
@@ -132,6 +134,7 @@ function getPartitionStatuses(response: unknown) {
 }
 
 function App() {
+  const isOperatorRoute = window.location.pathname.startsWith("/operador");
   const [tab, setTab] = useState(0);
   const [dashboard, setDashboard] = useState<Dashboard>(emptyDashboard);
   const [cameras, setCameras] = useState<Camera[]>([]);
@@ -151,6 +154,8 @@ function App() {
   const [centralStatusMessage, setCentralStatusMessage] = useState("");
   const [centralAutoRefresh, setCentralAutoRefresh] = useState(true);
   const centralRefreshRunning = useRef(false);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const [alarmSoundEnabled, setAlarmSoundEnabled] = useState(false);
   const [notice, setNotice] = useState("");
 
   const refreshAll = async () => {
@@ -193,12 +198,52 @@ function App() {
   useEffect(() => {
     refreshAll().catch((error) => setNotice(error.message));
     const socket = io();
-    socket.on("event:created", () => refreshAll().catch((error) => setNotice(error.message)));
+    socket.on("event:created", () => {
+      if (isOperatorRoute) playAlarmSound();
+      refreshAll().catch((error) => setNotice(error.message));
+    });
     socket.on("event:updated", () => refreshAll().catch((error) => setNotice(error.message)));
     return () => {
       socket.disconnect();
     };
   }, []);
+
+  const playAlarmSound = () => {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return false;
+
+    const audioContext = audioContextRef.current;
+    if (!audioContext || audioContext.state === "suspended") return false;
+
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
+    oscillator.frequency.setValueAtTime(660, audioContext.currentTime + 0.18);
+    gain.gain.setValueAtTime(0.0001, audioContext.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.25, audioContext.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.45);
+    oscillator.connect(gain);
+    gain.connect(audioContext.destination);
+    oscillator.start();
+    oscillator.stop(audioContext.currentTime + 0.48);
+    return true;
+  };
+
+  const enableAlarmSound = async () => {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) {
+      setNotice("Este navegador nao suporta alerta sonoro.");
+      return;
+    }
+
+    const audioContext = audioContextRef.current ?? new AudioContextClass();
+    audioContextRef.current = audioContext;
+    await audioContext.resume();
+    setAlarmSoundEnabled(true);
+    playAlarmSound();
+    setNotice("Alerta sonoro do operador ativado.");
+  };
 
   useEffect(() => {
     window.ISScustomAPI?.onSetup?.((settings) => {
@@ -320,6 +365,21 @@ function App() {
   };
 
   const selectedPanel = useMemo(() => {
+    if (isOperatorRoute) {
+      return (
+        <OperatorView
+          dashboard={dashboard}
+          events={events}
+          mediaClientId={html5MediaClientId}
+          alarmSoundEnabled={alarmSoundEnabled}
+          onEnableAlarmSound={enableAlarmSound}
+          onRefresh={refreshAll}
+          onShowEvent={showEventCameras}
+          onHandleEvent={handleEvent}
+        />
+      );
+    }
+
     if (tab === 0) {
       return (
         <DashboardView
@@ -375,6 +435,7 @@ function App() {
     );
   }, [
     tab,
+    isOperatorRoute,
     dashboard,
     events,
     cameras,
@@ -390,7 +451,8 @@ function App() {
     updatedAtByIsep,
     centralStatusLoading,
     centralStatusMessage,
-    centralAutoRefresh
+    centralAutoRefresh,
+    alarmSoundEnabled
   ]);
 
   return (
@@ -399,23 +461,33 @@ function App() {
         <Toolbar sx={{ gap: 2, borderBottom: "1px solid #dfe6ea" }}>
           <DashboardIcon color="primary" />
           <Box sx={{ flexGrow: 1 }}>
-            <Typography variant="h6">Viaweb Show Cam</Typography>
+            <Typography variant="h6">{isOperatorRoute ? "Viaweb Show Cam - Operador" : "Viaweb Show Cam"}</Typography>
             <Typography variant="body2" color="text.secondary">
-              Middleware operacional para eventos Viaweb e ISS SecurOS
+              {isOperatorRoute ? "Fila de atendimento de eventos Viaweb" : "Middleware operacional para eventos Viaweb e ISS SecurOS"}
             </Typography>
           </Box>
+          {isOperatorRoute ? (
+            <Button
+              variant={alarmSoundEnabled ? "contained" : "outlined"}
+              onClick={() => enableAlarmSound().catch((error) => setNotice(error.message))}
+            >
+              Som {alarmSoundEnabled ? "ativo" : "ativar"}
+            </Button>
+          ) : null}
           <Tooltip title="Atualizar dados">
             <IconButton onClick={() => refreshAll().catch((error) => setNotice(error.message))}>
               <Refresh />
             </IconButton>
           </Tooltip>
         </Toolbar>
-        <Tabs value={tab} onChange={(_, value) => setTab(value)} variant="scrollable" scrollButtons="auto">
-          <Tab icon={<DashboardIcon />} iconPosition="start" label="Dashboard" />
-          <Tab icon={<Sensors />} iconPosition="start" label="Clientes" />
-          <Tab icon={<CameraAlt />} iconPosition="start" label="Cameras" />
-          <Tab icon={<Settings />} iconPosition="start" label="Configuracao" />
-        </Tabs>
+        {!isOperatorRoute ? (
+          <Tabs value={tab} onChange={(_, value) => setTab(value)} variant="scrollable" scrollButtons="auto">
+            <Tab icon={<DashboardIcon />} iconPosition="start" label="Dashboard" />
+            <Tab icon={<Sensors />} iconPosition="start" label="Clientes" />
+            <Tab icon={<CameraAlt />} iconPosition="start" label="Cameras" />
+            <Tab icon={<Settings />} iconPosition="start" label="Configuracao" />
+          </Tabs>
+        ) : null}
       </AppBar>
       <Container maxWidth="xl" sx={{ py: 3 }}>
         {notice && (
@@ -526,6 +598,99 @@ function DashboardView({
         </Paper>
       </Grid>
     </Grid>
+  );
+}
+
+function OperatorView({
+  dashboard,
+  events,
+  mediaClientId,
+  alarmSoundEnabled,
+  onEnableAlarmSound,
+  onRefresh,
+  onShowEvent,
+  onHandleEvent
+}: {
+  dashboard: Dashboard;
+  events: EventRecord[];
+  mediaClientId: string;
+  alarmSoundEnabled: boolean;
+  onEnableAlarmSound: () => Promise<void>;
+  onRefresh: () => Promise<void>;
+  onShowEvent: (eventId: number) => Promise<void>;
+  onHandleEvent: (eventId: number) => Promise<void>;
+}) {
+  const [queueTab, setQueueTab] = useState(0);
+  const pendingEvents = events.filter((event) => !isEventHandled(event));
+  const handledEvents = events.filter(isEventHandled);
+  const oldestPending = pendingEvents.at(-1);
+
+  return (
+    <Stack spacing={2}>
+      <Paper sx={{ p: 2 }}>
+        <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" spacing={2}>
+          <Box>
+            <Typography variant="h5">Fila do operador</Typography>
+            <Typography color="text.secondary">
+              Atendimento de alarmes em tempo real. Media Client HTML5 {normalizeMediaClientId(mediaClientId)}.
+            </Typography>
+          </Box>
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+            <Button variant={alarmSoundEnabled ? "contained" : "outlined"} onClick={() => onEnableAlarmSound()}>
+              {alarmSoundEnabled ? "Som ativo" : "Ativar som"}
+            </Button>
+            <Button variant="outlined" startIcon={<Refresh />} onClick={() => onRefresh()}>
+              Atualizar
+            </Button>
+          </Stack>
+        </Stack>
+        {!alarmSoundEnabled ? (
+          <Alert severity="warning" sx={{ mt: 2 }}>
+            Clique em Ativar som ao abrir a tela. O navegador exige essa confirmacao para tocar alerta quando chegar evento.
+          </Alert>
+        ) : null}
+      </Paper>
+
+      <Grid container spacing={2}>
+        <Grid item xs={12} sm={6} md={3}>
+          <Paper sx={{ p: 2 }}>
+            <Typography variant="body2" color="text.secondary">Pendentes</Typography>
+            <Typography variant="h4">{pendingEvents.length}</Typography>
+          </Paper>
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <Paper sx={{ p: 2 }}>
+            <Typography variant="body2" color="text.secondary">Historico</Typography>
+            <Typography variant="h4">{handledEvents.length}</Typography>
+          </Paper>
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <Paper sx={{ p: 2 }}>
+            <Typography variant="body2" color="text.secondary">Show Cam OK</Typography>
+            <Typography variant="h4">{dashboard.successfulEvents}</Typography>
+          </Paper>
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <Paper sx={{ p: 2 }}>
+            <Typography variant="body2" color="text.secondary">Mais antigo</Typography>
+            <Typography variant="h6">{oldestPending ? formatDate(oldestPending.received_at) : "-"}</Typography>
+          </Paper>
+        </Grid>
+      </Grid>
+
+      <Paper sx={{ p: 2 }}>
+        <Tabs value={queueTab} onChange={(_, value) => setQueueTab(value)} sx={{ mb: 1 }}>
+          <Tab label={`Pendentes (${pendingEvents.length})`} />
+          <Tab label={`Historico (${handledEvents.length})`} />
+        </Tabs>
+        <EventList
+          events={(queueTab === 0 ? pendingEvents : handledEvents).slice(0, 80)}
+          history={queueTab === 1}
+          onShowEvent={onShowEvent}
+          onHandleEvent={onHandleEvent}
+        />
+      </Paper>
+    </Stack>
   );
 }
 
