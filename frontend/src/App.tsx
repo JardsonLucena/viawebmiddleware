@@ -370,8 +370,19 @@ function App() {
         <OperatorView
           dashboard={dashboard}
           events={events}
+          buildings={buildings}
+          centralPartitions={centralPartitions}
+          statusesByIsep={statusesByIsep}
+          updatedAtByIsep={updatedAtByIsep}
+          loadingIsep={centralStatusLoading}
+          statusMessage={centralStatusMessage}
+          autoRefresh={centralAutoRefresh}
           mediaClientId={html5MediaClientId}
           alarmSoundEnabled={alarmSoundEnabled}
+          onRefreshCentral={refreshCentralStatus}
+          onRefreshAllCentals={refreshAllCentralStatuses}
+          onToggleAutoRefresh={() => setCentralAutoRefresh((value) => !value)}
+          onPartitionCommand={sendCentralPartitionCommand}
           onEnableAlarmSound={enableAlarmSound}
           onRefresh={refreshAll}
           onShowEvent={showEventCameras}
@@ -604,8 +615,19 @@ function DashboardView({
 function OperatorView({
   dashboard,
   events,
+  buildings,
+  centralPartitions,
+  statusesByIsep,
+  updatedAtByIsep,
+  loadingIsep,
+  statusMessage,
+  autoRefresh,
   mediaClientId,
   alarmSoundEnabled,
+  onRefreshCentral,
+  onRefreshAllCentals,
+  onToggleAutoRefresh,
+  onPartitionCommand,
   onEnableAlarmSound,
   onRefresh,
   onShowEvent,
@@ -613,13 +635,25 @@ function OperatorView({
 }: {
   dashboard: Dashboard;
   events: EventRecord[];
+  buildings: Building[];
+  centralPartitions: CentralPartition[];
+  statusesByIsep: Record<string, PartitionStatus[]>;
+  updatedAtByIsep: Record<string, string>;
+  loadingIsep: string;
+  statusMessage: string;
+  autoRefresh: boolean;
   mediaClientId: string;
   alarmSoundEnabled: boolean;
+  onRefreshCentral: (isep: string, silent?: boolean) => Promise<void>;
+  onRefreshAllCentals: (silent?: boolean) => Promise<void>;
+  onToggleAutoRefresh: () => void;
+  onPartitionCommand: (isep: string, cmd: "armar" | "desarmar", partition: number) => Promise<void>;
   onEnableAlarmSound: () => Promise<void>;
   onRefresh: () => Promise<void>;
   onShowEvent: (eventId: number) => Promise<void>;
   onHandleEvent: (eventId: number) => Promise<void>;
 }) {
+  const [operatorTab, setOperatorTab] = useState(0);
   const [queueTab, setQueueTab] = useState(0);
   const pendingEvents = events.filter((event) => !isEventHandled(event));
   const handledEvents = events.filter(isEventHandled);
@@ -679,16 +713,38 @@ function OperatorView({
       </Grid>
 
       <Paper sx={{ p: 2 }}>
-        <Tabs value={queueTab} onChange={(_, value) => setQueueTab(value)} sx={{ mb: 1 }}>
-          <Tab label={`Pendentes (${pendingEvents.length})`} />
-          <Tab label={`Historico (${handledEvents.length})`} />
+        <Tabs value={operatorTab} onChange={(_, value) => setOperatorTab(value)} sx={{ mb: 2 }}>
+          <Tab label={`Eventos (${pendingEvents.length})`} />
+          <Tab label={`Centrais (${buildings.length})`} />
         </Tabs>
-        <EventList
-          events={(queueTab === 0 ? pendingEvents : handledEvents).slice(0, 80)}
-          history={queueTab === 1}
-          onShowEvent={onShowEvent}
-          onHandleEvent={onHandleEvent}
-        />
+        {operatorTab === 0 ? (
+          <>
+            <Tabs value={queueTab} onChange={(_, value) => setQueueTab(value)} sx={{ mb: 1 }}>
+              <Tab label={`Pendentes (${pendingEvents.length})`} />
+              <Tab label={`Historico (${handledEvents.length})`} />
+            </Tabs>
+            <EventList
+              events={(queueTab === 0 ? pendingEvents : handledEvents).slice(0, 80)}
+              history={queueTab === 1}
+              onShowEvent={onShowEvent}
+              onHandleEvent={onHandleEvent}
+            />
+          </>
+        ) : (
+          <CentralCardsView
+            buildings={buildings}
+            centralPartitions={centralPartitions}
+            statusesByIsep={statusesByIsep}
+            updatedAtByIsep={updatedAtByIsep}
+            loadingIsep={loadingIsep}
+            statusMessage={statusMessage}
+            autoRefresh={autoRefresh}
+            onRefreshCentral={onRefreshCentral}
+            onRefreshAllCentals={onRefreshAllCentals}
+            onToggleAutoRefresh={onToggleAutoRefresh}
+            onPartitionCommand={onPartitionCommand}
+          />
+        )}
       </Paper>
     </Stack>
   );
