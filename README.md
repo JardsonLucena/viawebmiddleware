@@ -54,7 +54,7 @@ cp backend/.env.local.example backend/.env
 
 ```env
 STORAGE_MODE=postgres
-DATABASE_URL="postgresql://postgres:postgres@localhost:5432/viaweb?schema=public"
+DATABASE_URL="postgresql://DB_USER:DB_PASSWORD@DB_HOST:5432/DB_NAME?schema=public"
 PORT=3333
 CORS_ORIGIN=http://localhost:5173
 
