@@ -1,0 +1,174 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model AlarmAccount {
+  id             Int      @id @default(autoincrement())
+  account_number String   @unique
+  description    String?
+  enabled        Boolean  @default(true)
+  sensors        Sensor[]
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  @@map("alarm_accounts")
+}
+
+model Sensor {
+  id          Int               @id @default(autoincrement())
+  account     String
+  partition   String
+  zone        String
+  sensor_name String
+  description String?
+  mappings    SensorCameraMap[]
+  created_at  DateTime          @default(now())
+  updated_at  DateTime          @updatedAt
+  alarmAccount AlarmAccount     @relation(fields: [account], references: [account_number], onDelete: Restrict)
+
+  @@unique([account, partition, zone])
+  @@map("sensors")
+}
+
+model AccountUser {
+  id          Int      @id @default(autoincrement())
+  isep        String?
+  account     String
+  partition   String
+  user_number String
+  user_name   String
+  description String?
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@unique([account, partition, user_number])
+  @@unique([isep, partition, user_number])
+  @@map("account_users")
+}
+
+model Building {
+  id              Int      @id @default(autoincrement())
+  isep            String   @unique
+  building_number String?
+  building_name   String
+  description     String?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@map("buildings")
+}
+
+model CentralPartition {
+  id             Int      @id @default(autoincrement())
+  isep           String
+  partition      String
+  partition_name String
+  description    String?
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  @@unique([isep, partition])
+  @@map("central_partitions")
+}
+
+model CentralZone {
+  id          Int      @id @default(autoincrement())
+  isep        String
+  partition   String
+  zone        String
+  zone_name   String
+  description String?
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@unique([isep, partition, zone])
+  @@map("central_zones")
+}
+
+model CentralPartitionCamera {
+  id            Int    @id @default(autoincrement())
+  isep          String
+  partition     String
+  iss_camera_id String
+  order         Int    @default(0)
+
+  @@unique([isep, partition, iss_camera_id])
+  @@map("central_partition_cameras")
+}
+
+model CentralZoneCamera {
+  id            Int    @id @default(autoincrement())
+  isep          String
+  partition     String
+  zone          String
+  iss_camera_id String
+  order         Int    @default(0)
+
+  @@unique([isep, partition, zone, iss_camera_id])
+  @@map("central_zone_cameras")
+}
+
+model Camera {
+  id            Int               @id @default(autoincrement())
+  iss_camera_id String            @unique
+  camera_name   String
+  description   String?
+  mappings      SensorCameraMap[]
+  created_at    DateTime          @default(now())
+  updated_at    DateTime          @updatedAt
+
+  @@map("cameras")
+}
+
+model SensorCameraMap {
+  id        Int    @id @default(autoincrement())
+  sensor_id Int
+  camera_id Int
+  order     Int    @default(0)
+  sensor    Sensor @relation(fields: [sensor_id], references: [id], onDelete: Cascade)
+  camera    Camera @relation(fields: [camera_id], references: [id], onDelete: Cascade)
+
+  @@unique([sensor_id, camera_id])
+  @@map("sensor_camera_map")
+}
+
+model Event {
+  id            Int      @id @default(autoincrement())
+  received_at   DateTime @default(now())
+  account       String
+  partition     String
+  zone          String
+  event_code    String
+  event_type    String   @default("OUTRO")
+  payload       Json
+  cameras_sent  Json
+  status        String   @default("PENDENTE")
+  execution_ms  Int?
+  error_message String?
+  treatments    EventTreatment[]
+
+  @@index([received_at])
+  @@index([account, partition, zone])
+  @@index([status, received_at])
+  @@map("events")
+}
+
+model EventTreatment {
+  id            Int      @id @default(autoincrement())
+  event_id      Int
+  operator_id   String?
+  operator_name String?
+  action        String
+  note          String?
+  created_at    DateTime @default(now())
+  event         Event    @relation(fields: [event_id], references: [id], onDelete: Cascade)
+
+  @@index([event_id, created_at])
+  @@index([action, created_at])
+  @@map("event_treatments")
+}
