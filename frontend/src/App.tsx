@@ -657,7 +657,7 @@ function OperatorView({
   const [queueTab, setQueueTab] = useState(0);
   const pendingEvents = events.filter((event) => !isEventHandled(event));
   const handledEvents = events.filter(isEventHandled);
-  const oldestPending = pendingEvents.at(-1);
+  const oldestPending = pendingEvents.length > 0 ? pendingEvents[pendingEvents.length - 1] : undefined;
 
   return (
     <Stack spacing={2}>
@@ -1481,9 +1481,10 @@ function formatDate(value: unknown) {
 }
 
 function lastTreatmentSummary(event: EventRecord) {
-  const lastTreatment = [...(event.treatments ?? [])].sort(
+  const sortedTreatments = [...(event.treatments ?? [])].sort(
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-  ).at(-1);
+  );
+  const lastTreatment = sortedTreatments.length > 0 ? sortedTreatments[sortedTreatments.length - 1] : undefined;
 
   if (!lastTreatment) return "sem tratativa registrada";
   return `${lastTreatment.action} em ${formatDate(lastTreatment.created_at)} por ${lastTreatment.operator_name ?? "Operador"} - ${lastTreatment.note ?? "sem observacao"}`;

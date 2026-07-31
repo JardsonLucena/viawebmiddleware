@@ -1,8 +1,19 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import legacy from "@vitejs/plugin-legacy";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    legacy({
+      targets: ["Chrome >= 64", "Edge >= 79"],
+      modernPolyfills: true,
+      renderLegacyChunks: true
+    })
+  ],
+  build: {
+    target: "es2018"
+  },
   server: {
     port: 5173,
     proxy: {
