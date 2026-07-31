@@ -548,12 +548,21 @@ class PrismaDataStore implements DataStore {
   }
 
   async listEvents(limit: number) {
-    const events = await (prisma as any).event.findMany({
-      orderBy: [{ status: "asc" }, { received_at: "desc" }],
-      take: limit,
-      include: { treatments: { orderBy: { created_at: "asc" } } }
-    });
-    return events.map((event: any) => this.normalizeEvent(event));
+    const [pendingEvents, handledEvents] = await Promise.all([
+      (prisma as any).event.findMany({
+        where: { status: { not: "ENCERRADO" } },
+        orderBy: { received_at: "desc" },
+        take: limit,
+        include: { treatments: { orderBy: { created_at: "asc" } } }
+      }),
+      (prisma as any).event.findMany({
+        where: { status: "ENCERRADO" },
+        orderBy: { received_at: "desc" },
+        take: limit,
+        include: { treatments: { orderBy: { created_at: "asc" } } }
+      })
+    ]);
+    return [...pendingEvents, ...handledEvents].map((event: any) => this.normalizeEvent(event));
   }
 
   async findEventById(id: number) {
@@ -606,11 +615,7 @@ class PrismaDataStore implements DataStore {
 
   async dashboard() {
     const [events, totalEvents, failedEvents, successfulEvents, avg] = await Promise.all([
-      (prisma as any).event.findMany({
-        orderBy: [{ status: "asc" }, { received_at: "desc" }],
-        take: 10,
-        include: { treatments: { orderBy: { created_at: "asc" } } }
-      }),
+      this.listEvents(10),
       prisma.event.count(),
       prisma.event.count({ where: { error_message: { not: null } } }),
       prisma.event.count({ where: { error_message: null } }),
@@ -622,7 +627,7 @@ class PrismaDataStore implements DataStore {
       failedEvents,
       successfulEvents,
       averageExecutionMs: Math.round(avg._avg.execution_ms ?? 0),
-      recentEvents: events.map((event: any) => this.normalizeEvent(event))
+      recentEvents: events
     };
   }
 
@@ -1013,10 +1018,12 @@ class MemoryDataStore implements DataStore {
   }
 
   async listEvents(limit: number) {
-    return this.events
+    const events = this.events
       .map((event) => this.withTreatments(event))
-      .sort((a, b) => eventStatusOrder(a.status) - eventStatusOrder(b.status) || b.received_at.getTime() - a.received_at.getTime())
-      .slice(0, limit);
+      .sort((a, b) => eventStatusOrder(a.status) - eventStatusOrder(b.status) || b.received_at.getTime() - a.received_at.getTime());
+    const pendingEvents = events.filter((event) => event.status !== "ENCERRADO").slice(0, limit);
+    const handledEvents = events.filter((event) => event.status === "ENCERRADO").slice(0, limit);
+    return [...pendingEvents, ...handledEvents];
   }
 
   async findEventById(id: number) {

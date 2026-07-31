@@ -674,7 +674,7 @@ function DashboardView({
                 <Tab label={`Historico (${handledEvents.length})`} />
               </Tabs>
               <EventList
-                events={(queueTab === 0 ? pendingEvents : handledEvents).slice(0, 30)}
+                events={queueTab === 0 ? pendingEvents : handledEvents}
                 history={queueTab === 1}
                 onShowEvent={onShowEvent}
                 onHandleEvent={onHandleEvent}
@@ -813,7 +813,7 @@ function OperatorView({
               <Tab label={`Historico (${handledEvents.length})`} />
             </Tabs>
             <EventList
-              events={(queueTab === 0 ? pendingEvents : handledEvents).slice(0, 80)}
+              events={queueTab === 0 ? pendingEvents : handledEvents}
               history={queueTab === 1}
               onShowEvent={onShowEvent}
               onHandleEvent={onHandleEvent}

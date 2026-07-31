@@ -46,7 +46,7 @@ export function eventsRouter(io: Server) {
 
   router.get("/", async (_req, res, next) => {
     try {
-      const events = await dataStore.listEvents(100);
+      const events = await dataStore.listEvents(250);
       res.json(events);
     } catch (error) {
       next(error);
