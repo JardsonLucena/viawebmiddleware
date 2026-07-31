@@ -92,6 +92,7 @@ export type EventRecord = {
       accountName?: string | null;
       userName?: string | null;
       category?: string;
+      eventType?: string;
       action?: string;
       description?: string;
       display?: string;

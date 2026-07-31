@@ -86,8 +86,62 @@ type ReceiverCommandResponse = {
   response?: unknown;
 };
 
+function createAlarmDataUri() {
+  const sampleRate = 8000;
+  const durationSeconds = 0.55;
+  const sampleCount = Math.floor(sampleRate * durationSeconds);
+  const dataSize = sampleCount * 2;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+
+  const writeString = (offset: number, value: string) => {
+    for (let index = 0; index < value.length; index += 1) {
+      view.setUint8(offset + index, value.charCodeAt(index));
+    }
+  };
+
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, "data");
+  view.setUint32(40, dataSize, true);
+
+  for (let index = 0; index < sampleCount; index += 1) {
+    const time = index / sampleRate;
+    const frequency = time < 0.27 ? 880 : 660;
+    const envelope = Math.min(1, index / 120) * Math.min(1, (sampleCount - index) / 240);
+    const sample = Math.sin(2 * Math.PI * frequency * time) * 0.65 * envelope;
+    view.setInt16(44 + index * 2, Math.max(-1, Math.min(1, sample)) * 32767, true);
+  }
+
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 1) {
+    binary += String.fromCharCode(bytes[index]);
+  }
+  return `data:audio/wav;base64,${window.btoa(binary)}`;
+}
+
 function normalizeMediaClientId(mediaClientId: string) {
   return mediaClientId.trim().replace(/^MEDIA_CLIENT_/i, "") || "1";
+}
+
+function isIntrusionAlarmEvent(event: EventRecord) {
+  const interpretation = event.payload?.interpretation;
+  const eventCode = event.event_code.trim();
+  const baseCode = eventCode.slice(-3);
+  const eventType = String(interpretation?.eventType ?? "").toUpperCase();
+  const displayText = `${interpretation?.display ?? ""} ${interpretation?.description ?? ""}`.toLowerCase();
+
+  return baseCode === "130" && (eventType === "DISPARO" || eventCode.startsWith("1") || displayText.includes("intrus"));
 }
 
 function sendToSecurosHtml5MediaClient(mediaClientId: string, cameraIds: string[]) {
@@ -155,6 +209,7 @@ function App() {
   const [centralAutoRefresh, setCentralAutoRefresh] = useState(true);
   const centralRefreshRunning = useRef(false);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const alarmAudioRef = useRef<HTMLAudioElement | null>(null);
   const [alarmSoundEnabled, setAlarmSoundEnabled] = useState(false);
   const [notice, setNotice] = useState("");
 
@@ -198,8 +253,12 @@ function App() {
   useEffect(() => {
     refreshAll().catch((error) => setNotice(error.message));
     const socket = io();
-    socket.on("event:created", () => {
-      if (isOperatorRoute) playAlarmSound();
+    socket.on("event:created", (event: EventRecord) => {
+      if (isOperatorRoute && isIntrusionAlarmEvent(event)) {
+        playAlarmSound().then((played) => {
+          if (!played) setNotice("Evento recebido, mas o HTML5 bloqueou o alerta sonoro. Clique em Ativar som novamente.");
+        });
+      }
       refreshAll().catch((error) => setNotice(error.message));
     });
     socket.on("event:updated", () => refreshAll().catch((error) => setNotice(error.message)));
@@ -208,41 +267,71 @@ function App() {
     };
   }, []);
 
-  const playAlarmSound = () => {
+  const playAlarmSound = async () => {
+    let played = false;
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextClass) return false;
 
-    const audioContext = audioContextRef.current;
-    if (!audioContext || audioContext.state === "suspended") return false;
+    if (AudioContextClass) {
+      const audioContext = audioContextRef.current;
+      if (audioContext) {
+        if (audioContext.state === "suspended") await audioContext.resume();
+        if (audioContext.state !== "suspended") {
+          for (let index = 0; index < 3; index += 1) {
+            const start = audioContext.currentTime + index * 0.62;
+            const oscillator = audioContext.createOscillator();
+            const gain = audioContext.createGain();
+            oscillator.type = "square";
+            oscillator.frequency.setValueAtTime(880, start);
+            oscillator.frequency.setValueAtTime(660, start + 0.18);
+            gain.gain.setValueAtTime(0.0001, start);
+            gain.gain.exponentialRampToValueAtTime(0.35, start + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.42);
+            oscillator.connect(gain);
+            gain.connect(audioContext.destination);
+            oscillator.start(start);
+            oscillator.stop(start + 0.45);
+          }
+          played = true;
+        }
+      }
+    }
 
-    const oscillator = audioContext.createOscillator();
-    const gain = audioContext.createGain();
-    oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
-    oscillator.frequency.setValueAtTime(660, audioContext.currentTime + 0.18);
-    gain.gain.setValueAtTime(0.0001, audioContext.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.25, audioContext.currentTime + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.45);
-    oscillator.connect(gain);
-    gain.connect(audioContext.destination);
-    oscillator.start();
-    oscillator.stop(audioContext.currentTime + 0.48);
-    return true;
+    const alarmAudio = alarmAudioRef.current;
+    if (alarmAudio) {
+      try {
+        alarmAudio.currentTime = 0;
+        const result = alarmAudio.play();
+        if (result) await result;
+        played = true;
+      } catch {
+        // Web Audio above may still have succeeded; the caller shows a visible notice if both paths fail.
+      }
+    }
+
+    return played;
   };
 
   const enableAlarmSound = async () => {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextClass) {
+    if (!AudioContextClass && typeof Audio === "undefined") {
       setNotice("Este navegador nao suporta alerta sonoro.");
       return;
     }
 
-    const audioContext = audioContextRef.current ?? new AudioContextClass();
-    audioContextRef.current = audioContext;
-    await audioContext.resume();
+    if (AudioContextClass) {
+      const audioContext = audioContextRef.current ?? new AudioContextClass();
+      audioContextRef.current = audioContext;
+      await audioContext.resume();
+    }
+
+    if (!alarmAudioRef.current && typeof Audio !== "undefined") {
+      alarmAudioRef.current = new Audio(createAlarmDataUri());
+      alarmAudioRef.current.preload = "auto";
+      alarmAudioRef.current.volume = 1;
+    }
+
     setAlarmSoundEnabled(true);
-    playAlarmSound();
-    setNotice("Alerta sonoro do operador ativado.");
+    setNotice("Alerta sonoro do operador ativado. O audio toca somente em disparo de intrusao.");
   };
 
   useEffect(() => {
