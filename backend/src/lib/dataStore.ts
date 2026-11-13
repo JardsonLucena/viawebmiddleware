@@ -227,6 +227,7 @@ interface DataStore {
   findUserByIsep(isep: string, partition: string, userNumber: string): Promise<AccountUserRecord | null>;
   listBuildings(): Promise<BuildingRecord[]>;
   upsertBuilding(input: BuildingInput): Promise<BuildingRecord>;
+  deleteBuilding(isep: string): Promise<boolean>;
   findBuildingByIsep(isep: string): Promise<BuildingRecord | null>;
   listCentralPartitions(): Promise<CentralPartitionRecord[]>;
   upsertCentralPartition(input: CentralPartitionInput): Promise<CentralPartitionRecord>;
@@ -258,6 +259,19 @@ interface DataStore {
 }
 
 class PrismaDataStore implements DataStore {
+  async deleteBuilding(isep: string) {
+    return prisma.$transaction(async (tx) => {
+      const removed = await tx.building.deleteMany({ where: { isep } });
+      if (!removed.count) return false;
+      await tx.centralZoneCamera.deleteMany({ where: { isep } });
+      await tx.centralPartitionCamera.deleteMany({ where: { isep } });
+      await tx.centralZone.deleteMany({ where: { isep } });
+      await tx.centralPartition.deleteMany({ where: { isep } });
+      await tx.accountUser.deleteMany({ where: { isep } });
+      return true;
+    });
+  }
+
   async findAccount(accountNumber: string) {
     return prisma.alarmAccount.findUnique({ where: { account_number: accountNumber } });
   }
@@ -646,6 +660,19 @@ class PrismaDataStore implements DataStore {
 }
 
 class MemoryDataStore implements DataStore {
+  async deleteBuilding(isep: string) {
+    const index = this.buildings.findIndex((building) => building.isep === isep);
+    if (index === -1) return false;
+    this.buildings.splice(index, 1);
+    const records = [this.centralZoneCameras, this.centralPartitionCameras, this.centralZones, this.centralPartitions, this.users];
+    for (const collection of records) {
+      for (let i = collection.length - 1; i >= 0; i -= 1) {
+        if (collection[i].isep === isep) collection.splice(i, 1);
+      }
+    }
+    return true;
+  }
+
   private accountId = 1;
   private sensorId = 1;
   private cameraId = 1;

@@ -12,6 +12,15 @@ const buildingSchema = z.object({
 
 export const buildingsRouter = Router();
 
+buildingsRouter.delete("/:isep", async (req, res, next) => {
+  try {
+    if (!(await dataStore.deleteBuilding(req.params.isep))) throw new HttpError(404, "central_not_found");
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
 buildingsRouter.get("/", async (_req, res, next) => {
   try {
     res.json(await dataStore.listBuildings());

@@ -33,6 +33,7 @@ import {
   Dashboard as DashboardIcon,
   Edit,
   DarkMode,
+  DeleteOutline,
   LightMode,
   Link as LinkIcon,
   Lock,
@@ -1133,6 +1134,8 @@ function ClientsView({
   const [selectedPartition, setSelectedPartition] = useState("1");
   const [commandResult, setCommandResult] = useState("");
   const [creatingCentral, setCreatingCentral] = useState(false);
+  const [centralToDelete, setCentralToDelete] = useState<Building | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [showAllPartitions, setShowAllPartitions] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
@@ -1370,7 +1373,35 @@ function ClientsView({
         <Typography variant="h6">Centrais ({buildings.length})</Typography>
         <Button variant="contained" startIcon={<Add />} onClick={() => { setFormError(""); setCreatingCentral(true); }}>Nova central</Button>
       </Stack>
-      {formError && !creatingCentral && !zoneCameraForm.zone && <Alert severity="error">{formError}</Alert>}
+      {formError && !creatingCentral && !centralToDelete && !zoneCameraForm.zone && <Alert severity="error">{formError}</Alert>}
+      <Dialog open={Boolean(centralToDelete)} fullWidth maxWidth="xs" onClose={saving ? undefined : () => setCentralToDelete(null)}>
+        <form onSubmit={(event) => {
+          event.preventDefault();
+          const isep = centralToDelete?.isep;
+          if (!isep || deleteConfirmation.trim() !== isep) return;
+          void save(async () => {
+            await api.delete(`/buildings/${encodeURIComponent(isep)}`);
+            try { localStorage.removeItem(`centralCommandPassword:${isep}`); } catch {}
+            setCentralToDelete(null);
+            setSelectedIsep("");
+            await onChanged();
+          });
+        }}>
+          <DialogTitle>Excluir {centralToDelete?.building_name}</DialogTitle>
+          <DialogContent dividers>
+            <Stack spacing={2}>
+              <Alert severity="warning">As partições, zonas, usuários vinculados e vínculos de câmeras serão removidos. O histórico de eventos e o catálogo de câmeras serão preservados.</Alert>
+              {formError && <Alert severity="error">{formError}</Alert>}
+              <TextField label={`Digite o ISEP ${centralToDelete?.isep ?? ""}`} value={deleteConfirmation}
+                onChange={(event) => setDeleteConfirmation(event.target.value)} disabled={saving} />
+            </Stack>
+          </DialogContent>
+          <DialogActions>
+            <Button disabled={saving} onClick={() => setCentralToDelete(null)}>Cancelar</Button>
+            <Button type="submit" color="error" variant="contained" disabled={saving || deleteConfirmation.trim() !== centralToDelete?.isep}>Excluir central</Button>
+          </DialogActions>
+        </form>
+      </Dialog>
       <Dialog open={creatingCentral} fullWidth maxWidth="xs" onClose={saving ? undefined : () => setCreatingCentral(false)}>
         <form onSubmit={submitCentral}>
           <DialogTitle>Nova central</DialogTitle>
@@ -1447,6 +1478,11 @@ function ClientsView({
                 <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" spacing={2}>
                   <Box>
                     <Typography variant="h5">{selectedCentral.building_name}</Typography>
+                    <Button color="error" size="small" startIcon={<DeleteOutline />} disabled={saving} onClick={() => {
+                      setFormError("");
+                      setDeleteConfirmation("");
+                      setCentralToDelete(selectedCentral);
+                    }}>Excluir central</Button>
                     <Typography color="text.secondary">ISEP {activeIsep} · ultima consulta {formatDate(updatedAtByIsep[activeIsep])}</Typography>
                   </Box>
                   <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
