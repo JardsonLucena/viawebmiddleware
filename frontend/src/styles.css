@@ -179,3 +179,34 @@ body {
   border: 1px solid rgba(15, 23, 42, 0.08);
   background: rgba(255, 255, 255, 0.86);
 }
+
+[data-theme="dark"] .central-card,
+[data-theme="dark"] .client-central-card,
+[data-theme="dark"] .enabled-partition-card,
+[data-theme="dark"] .partition-detail-panel,
+[data-theme="dark"] .zone-row,
+[data-theme="dark"] .partition-actions,
+[data-theme="dark"] .partition-pill {
+  background: #25292c;
+  border-color: #42494e;
+  box-shadow: none;
+}
+
+[data-theme="dark"] .enabled-partition-card.selected {
+  border-color: #84c9dd;
+}
+
+[data-theme="dark"] .partition-pill.partition-armed {
+  background: #16382a;
+  border-color: #38b875;
+}
+
+[data-theme="dark"] .partition-pill.partition-disarmed {
+  background: #45262a;
+  border-color: #df6368;
+}
+
+[data-theme="dark"] .partition-pill.partition-alarm {
+  background: #620e19;
+  border-color: #f16972;
+}

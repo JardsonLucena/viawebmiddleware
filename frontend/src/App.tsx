@@ -7,6 +7,11 @@ import {
   Chip,
   Container,
   Divider,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Autocomplete,
   FormControlLabel,
   Grid,
   IconButton,
@@ -27,6 +32,8 @@ import {
   CameraAlt,
   Dashboard as DashboardIcon,
   Edit,
+  DarkMode,
+  LightMode,
   Link as LinkIcon,
   Lock,
   LockOpen,
@@ -135,13 +142,7 @@ function normalizeMediaClientId(mediaClientId: string) {
 }
 
 function isIntrusionAlarmEvent(event: EventRecord) {
-  const interpretation = event.payload?.interpretation;
-  const eventCode = event.event_code.trim();
-  const baseCode = eventCode.slice(-3);
-  const eventType = String(interpretation?.eventType ?? "").toUpperCase();
-  const displayText = `${interpretation?.display ?? ""} ${interpretation?.description ?? ""}`.toLowerCase();
-
-  return baseCode === "130" && (eventType === "DISPARO" || eventCode.startsWith("1") || displayText.includes("intrus"));
+  return event.event_code.trim() === "1130";
 }
 
 function sendToSecurosHtml5MediaClient(mediaClientId: string, cameraIds: string[]) {
@@ -187,7 +188,17 @@ function getPartitionStatuses(response: unknown) {
     }));
 }
 
-function App() {
+const treatmentActions = {
+  RECONHECIDO: "Reconhecer",
+  NOTA: "Registrar observação",
+  ACIONOU_RONDA: "Registrar acionamento da ronda",
+  ACIONOU_POLICIA: "Registrar acionamento da polícia",
+  ALARME_REAL: "Encerrar como alarme real",
+  FALSO_ALARME: "Encerrar como falso alarme",
+  ENCERRADO: "Encerrar ocorrência"
+};
+
+function App({ dark, onToggleTheme }: { dark: boolean; onToggleTheme: () => void }) {
   const isOperatorRoute = window.location.pathname.startsWith("/operador");
   const [tab, setTab] = useState(0);
   const [dashboard, setDashboard] = useState<Dashboard>(emptyDashboard);
@@ -212,6 +223,9 @@ function App() {
   const alarmAudioRef = useRef<HTMLAudioElement | null>(null);
   const [alarmSoundEnabled, setAlarmSoundEnabled] = useState(false);
   const [notice, setNotice] = useState("");
+  const [live, setLive] = useState(false);
+  const [treatmentId, setTreatmentId] = useState<number | null>(null);
+  const treatmentEvent = events.find((event) => event.id === treatmentId);
 
   const refreshAll = async () => {
     const [
@@ -253,6 +267,16 @@ function App() {
   useEffect(() => {
     refreshAll().catch((error) => setNotice(error.message));
     const socket = io();
+    socket.on("connect", () => {
+      setLive(true);
+      refreshAll().catch((error) => setNotice(error.message));
+    });
+    socket.on("disconnect", () => setLive(false));
+    const statusTimer = window.setInterval(() => {
+      api.get<Record<string, unknown>>("/viaweb/status", { timeout: 5000 })
+        .then(({ data }) => setViawebStatus(data))
+        .catch(() => setViawebStatus(null));
+    }, 10000);
     socket.on("event:created", (event: EventRecord) => {
       if (isOperatorRoute && isIntrusionAlarmEvent(event)) {
         playAlarmSound().then((played) => {
@@ -263,6 +287,7 @@ function App() {
     });
     socket.on("event:updated", () => refreshAll().catch((error) => setNotice(error.message)));
     return () => {
+      window.clearInterval(statusTimer);
       socket.disconnect();
     };
   }, []);
@@ -393,7 +418,11 @@ function App() {
   };
 
   const sendCentralPartitionCommand = async (isep: string, cmd: "armar" | "desarmar", partition: number) => {
-    const password = localStorage.getItem(`centralCommandPassword:${isep}`) ?? "3030";
+    const password = localStorage.getItem(`centralCommandPassword:${isep}`);
+    if (!password) {
+      setCentralStatusMessage(`Cadastre a senha de controle remoto da central ${isep} na aba Clientes.`);
+      return;
+    }
     setCentralStatusLoading(isep);
     try {
       await receiverCommand(isep, {
@@ -424,33 +453,30 @@ function App() {
   }, [centralAutoRefresh, buildings.map((building) => building.isep).join("|")]);
 
   const showEventCameras = async (eventId: number) => {
-    const cameraResponse = await api.get<EventCameraResponse>(`/events/${eventId}/cameras`);
-    const cameraIds = cameraResponse.data.cameras;
-
-    if (sendToSecurosHtml5MediaClient(html5MediaClientId, cameraIds)) {
+    try {
+      const { data } = await api.get<EventCameraResponse>(`/events/${eventId}/cameras`);
+      const cameraIds = data.cameras;
+      if (!cameraIds.length) {
+        setNotice("Nenhuma câmera vinculada a esta ocorrência.");
+        return;
+      }
+      if (!sendToSecurosHtml5MediaClient(html5MediaClientId, cameraIds)) {
+        setNotice("Abra a interface no HTML5 vinculado ao Media Client para mostrar as câmeras.");
+        return;
+      }
       await api.post(`/events/${eventId}/treatments`, {
         action: "CAMERA_ABERTA",
         operator_name: "Operador",
-        note: `Camera aberta manualmente: ${cameraIds.join(", ")}`
+        note: `Comando de exibição enviado para as câmeras ${cameraIds.join(", ")}`
       });
       setNotice(`ISScustomAPI enviou ADD_SEQUENCE para Media Client ${normalizeMediaClientId(html5MediaClientId)}: ${cameraIds.join(", ")}`);
-      return;
+    } catch (error) {
+      setNotice(`Falha na operação de câmera: ${String(error)}`);
     }
-
-    setNotice("ISScustomAPI nao esta disponivel nesta tela. Abra a interface dentro do HTML5 FrontEnd vinculado ao Media Client.");
   };
 
   const handleEvent = async (eventId: number) => {
-    const note = window.prompt("Descreva a tratativa do evento:", "Verificado pelo operador");
-    if (note === null) return;
-
-    await api.post(`/events/${eventId}/treatments`, {
-      action: "ENCERRADO",
-      operator_name: "Operador",
-      note
-    });
-    await refreshAll();
-    setNotice("Evento tratado e movido para o historico.");
+    setTreatmentId(eventId);
   };
 
   const selectedPanel = useMemo(() => {
@@ -505,6 +531,7 @@ function App() {
     if (tab === 1) {
       return (
         <ClientsView
+          cameras={cameras}
           users={users}
           buildings={buildings}
           centralPartitions={centralPartitions}
@@ -556,9 +583,9 @@ function App() {
   ]);
 
   return (
-    <Box className="page-shell">
+    <Box className="page-shell" data-theme={dark ? "dark" : "light"}>
       <AppBar position="static" color="inherit" elevation={0}>
-        <Toolbar sx={{ gap: 2, borderBottom: "1px solid #dfe6ea" }}>
+        <Toolbar sx={{ gap: 1, flexWrap: "wrap", py: 1, borderBottom: 1, borderColor: "divider" }}>
           <DashboardIcon color="primary" />
           <Box sx={{ flexGrow: 1 }}>
             <Typography variant="h6">{isOperatorRoute ? "Viaweb Show Cam - Operador" : "Viaweb Show Cam"}</Typography>
@@ -574,6 +601,11 @@ function App() {
               Som {alarmSoundEnabled ? "ativo" : "ativar"}
             </Button>
           ) : null}
+          <Tooltip title={dark ? "Tema claro" : "Tema escuro"}>
+            <IconButton aria-label={dark ? "Tema claro" : "Tema escuro"} onClick={onToggleTheme}>
+              {dark ? <LightMode /> : <DarkMode />}
+            </IconButton>
+          </Tooltip>
           <Tooltip title="Atualizar dados">
             <IconButton onClick={() => refreshAll().catch((error) => setNotice(error.message))}>
               <Refresh />
@@ -590,6 +622,11 @@ function App() {
         ) : null}
       </AppBar>
       <Container maxWidth="xl" sx={{ py: 3 }}>
+        <Stack direction="row" useFlexGap flexWrap="wrap" spacing={1} sx={{ mb: 2 }}>
+          <Chip size="small" color={live ? "success" : "warning"} label={live ? "Eventos ao vivo" : "Eventos ao vivo indisponíveis"} />
+          <Chip size="small" color={viawebStatus?.connected ? "success" : "warning"} label={viawebStatus?.connected ? "Receiver conectado" : viawebStatus ? "Receiver desconectado" : "Receiver sem status"} />
+          <Chip size="small" variant="outlined" label={issSetup ? `Media Client ${normalizeMediaClientId(html5MediaClientId)} vinculado` : "Vínculo SecurOS não confirmado"} />
+        </Stack>
         {notice && (
           <Alert severity="warning" onClose={() => setNotice("")} sx={{ mb: 2 }}>
             {notice}
@@ -597,6 +634,17 @@ function App() {
         )}
         {selectedPanel}
       </Container>
+      {treatmentEvent && (
+        <TreatmentDialog key={treatmentEvent.id} event={treatmentEvent}
+          onClose={() => setTreatmentId(null)}
+          onShowCamera={() => showEventCameras(treatmentEvent.id)}
+          onSave={async (action, note) => {
+            const { data } = await api.post<EventRecord>(`/events/${treatmentEvent.id}/treatments`, { action, note });
+            setEvents((current) => current.map((event) => event.id === data.id ? data : event));
+            setTreatmentId(null);
+          }}
+        />
+      )}
     </Box>
   );
 }
@@ -746,7 +794,8 @@ function OperatorView({
   const [queueTab, setQueueTab] = useState(0);
   const pendingEvents = events.filter((event) => !isEventHandled(event));
   const handledEvents = events.filter(isEventHandled);
-  const oldestPending = pendingEvents.length > 0 ? pendingEvents[pendingEvents.length - 1] : undefined;
+  const oldestPending = pendingEvents.reduce<EventRecord | undefined>((oldest, event) =>
+    !oldest || Date.parse(event.received_at) < Date.parse(oldest.received_at) ? event : oldest, undefined);
 
   return (
     <Stack spacing={2}>
@@ -933,6 +982,63 @@ function CentralCardsView({
   );
 }
 
+function TreatmentDialog({ event, onClose, onShowCamera, onSave }: {
+  event: EventRecord;
+  onClose: () => void;
+  onShowCamera: () => Promise<void>;
+  onSave: (action: string, note: string) => Promise<void>;
+}) {
+  const [action, setAction] = useState(event.status === "EM_TRATATIVA" ? "NOTA" : "RECONHECIDO");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const readOnly = isEventHandled(event);
+  const submit = async (formEvent: FormEvent) => {
+    formEvent.preventDefault();
+    if (saving || readOnly || (action !== "RECONHECIDO" && !note.trim())) return;
+    setSaving(true);
+    setError("");
+    try { await onSave(action, note.trim()); }
+    catch {
+      setError("Falha ao registrar a tratativa. Confira o histórico antes de tentar novamente.");
+      setSaving(false);
+    }
+  };
+  return (
+    <Dialog open fullWidth maxWidth="sm" onClose={saving ? undefined : onClose}>
+      <form onSubmit={submit}>
+        <DialogTitle>Ocorrência #{event.id}</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2}>
+            <Typography>{event.payload?.interpretation?.origin ?? event.account} · {event.payload?.interpretation?.display ?? event.event_code}</Typography>
+            {error && <Alert severity="error">{error}</Alert>}
+            {!readOnly && <>
+              <TextField select SelectProps={{ native: true }} label="Ação" value={action} onChange={(e) => setAction(e.target.value)} disabled={saving}>
+                {Object.entries(treatmentActions).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </TextField>
+              <TextField label="Observação" multiline minRows={3} value={note} onChange={(e) => setNote(e.target.value)} required={action !== "RECONHECIDO"} disabled={saving} />
+            </>}
+            <Typography variant="subtitle2">Histórico de atividades</Typography>
+            {(event.treatments ?? []).map((entry) => (
+              <Box key={entry.id}>
+                <Typography variant="body2">{treatmentActions[entry.action as keyof typeof treatmentActions] ?? entry.action}</Typography>
+                <Typography variant="caption" color="text.secondary">{formatDate(entry.created_at)} · {entry.operator_name ?? "Operador"}</Typography>
+                {entry.note && <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>{entry.note}</Typography>}
+              </Box>
+            ))}
+            {!event.treatments?.length && <Typography color="text.secondary">Nenhuma atividade registrada.</Typography>}
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ flexWrap: "wrap" }}>
+          <Button startIcon={<CameraAlt />} onClick={onShowCamera}>Mostrar câmeras</Button>
+          <Button onClick={onClose} disabled={saving}>Fechar</Button>
+          {!readOnly && <Button type="submit" variant="contained" disabled={saving}>Registrar</Button>}
+        </DialogActions>
+      </form>
+    </Dialog>
+  );
+}
+
 function EventList({
   events,
   history = false,
@@ -946,10 +1052,14 @@ function EventList({
 }) {
   if (events.length === 0) return <Typography color="text.secondary">{history ? "Nenhum evento tratado." : "Nenhum evento pendente."}</Typography>;
 
+  const ordered = history ? events : [...events].sort((a, b) =>
+    Number(isIntrusionAlarmEvent(b)) - Number(isIntrusionAlarmEvent(a)) ||
+    Date.parse(a.received_at) - Date.parse(b.received_at) || a.id - b.id
+  );
   return (
     <List dense>
-      {events.map((event) => (
-        <ListItem key={event.id} divider onClick={() => onShowEvent(event.id)} sx={{ cursor: "pointer" }}>
+      {ordered.map((event) => (
+        <ListItem key={event.id} divider sx={{ flexWrap: "wrap", gap: 1, py: 1 }}>
           <Box sx={{ mr: 1.5 }} className={`status-dot ${eventListStatusClass(event)}`} />
           <ListItemText
             primary={`${event.payload?.interpretation?.origin ?? event.payload?.interpretation?.accountName ?? event.account} - ${event.payload?.interpretation?.display ?? event.event_code}`}
@@ -959,15 +1069,15 @@ function EventList({
                 : `${new Date(event.received_at).toLocaleString()} - ISEP ${event.payload?.interpretation?.isep ?? "-"} / conta ${event.account} / P${event.partition} / zona-usuario ${event.zone} - ${event.status} - ${event.execution_ms ?? 0} ms`
             }
           />
-          <Stack direction="row" spacing={0.5}>
-            <Button size="small" variant="outlined" onClick={(clickEvent) => { clickEvent.stopPropagation(); onShowEvent(event.id); }}>
+          <Stack direction="row" useFlexGap flexWrap="wrap" spacing={0.5}>
+            {isIntrusionAlarmEvent(event) && <Chip size="small" color="error" label="Intrusão" />}
+            {event.status === "EM_TRATATIVA" && <Chip size="small" color="info" label="Em tratativa" />}
+            <Button size="small" variant="outlined" onClick={() => onShowEvent(event.id)}>
               Mostrar
             </Button>
-            {!history ? (
-              <Button size="small" variant="contained" onClick={(clickEvent) => { clickEvent.stopPropagation(); onHandleEvent(event.id); }}>
-                Tratar
+              <Button size="small" variant={history ? "outlined" : "contained"} onClick={() => onHandleEvent(event.id)}>
+                {history ? "Detalhes" : "Tratar"}
               </Button>
-            ) : null}
             {event.cameras_sent.map((cameraId) => (
               <Chip key={cameraId} size="small" label={cameraId} />
             ))}
@@ -979,6 +1089,7 @@ function EventList({
 }
 
 function ClientsView({
+  cameras,
   users,
   buildings,
   centralPartitions,
@@ -993,6 +1104,7 @@ function ClientsView({
   onPartitionCommand,
   onChanged
 }: {
+  cameras: Camera[];
   users: AccountUser[];
   buildings: Building[];
   centralPartitions: CentralPartition[];
@@ -1014,9 +1126,25 @@ function ClientsView({
   const [zoneForm, setZoneForm] = useState({ partition: "", zone: "", zone_name: "", description: "" });
   const [partitionCameraForm, setPartitionCameraForm] = useState({ partition: "", camera_ids: "" });
   const [zoneCameraForm, setZoneCameraForm] = useState({ partition: "", zone: "", camera_ids: "" });
-  const [commandPassword, setCommandPassword] = useState("3030");
+  const [commandPassword, setCommandPassword] = useState("");
+  const [passwordSaved, setPasswordSaved] = useState(false);
+  const [editingUser, setEditingUser] = useState<AccountUser | null>(null);
+  const [userSearch, setUserSearch] = useState("");
   const [selectedPartition, setSelectedPartition] = useState("1");
   const [commandResult, setCommandResult] = useState("");
+  const [creatingCentral, setCreatingCentral] = useState(false);
+  const [showAllPartitions, setShowAllPartitions] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState("");
+
+  const save = async (operation: () => Promise<void>) => {
+    if (saving) return;
+    setSaving(true);
+    setFormError("");
+    try { await operation(); }
+    catch { setFormError("Não foi possível concluir a operação. Confira os dados e a conexão."); }
+    finally { setSaving(false); }
+  };
 
   const selectedCentral = buildings.find((central) => central.isep === selectedIsep) ?? buildings[0];
   const activeIsep = selectedCentral?.isep ?? "";
@@ -1036,6 +1164,19 @@ function ClientsView({
   const selectedPartitionRecord = filteredPartitions.find((partition) => partition.partition === selectedPartition);
   const selectedPartitionZones = filteredZones.filter((zone) => zone.partition === selectedPartition);
   const selectedPartitionUsers = filteredUsers.filter((user) => user.partition === selectedPartition);
+  const matchingUsers = selectedPartitionUsers.filter((user) =>
+    `${user.user_number} ${user.user_name}`.toLowerCase().includes(userSearch.trim().toLowerCase())
+  );
+
+  const resetUserForm = () => {
+    setEditingUser(null);
+    setUserForm({ partition: selectedPartition, user_number: "", user_name: "", description: "" });
+  };
+
+  useEffect(() => {
+    resetUserForm();
+    setUserSearch("");
+  }, [activeIsep, selectedPartition]);
 
   useEffect(() => {
     if (!selectedIsep && buildings.length > 0) setSelectedIsep(buildings[0].isep);
@@ -1044,7 +1185,8 @@ function ClientsView({
   useEffect(() => {
     if (!activeIsep) return;
     const savedPassword = localStorage.getItem(`centralCommandPassword:${activeIsep}`);
-    setCommandPassword(savedPassword ?? "3030");
+    setCommandPassword("");
+    setPasswordSaved(Boolean(savedPassword));
     setCommandResult("");
   }, [activeIsep]);
 
@@ -1076,8 +1218,7 @@ function ClientsView({
       camera_ids: partitionCameraIds.join(", ")
     });
     setZoneCameraForm({ partition: selectedPartition, zone: "", camera_ids: "" });
-    setUserForm((current) => ({ ...current, partition: selectedPartition }));
-  }, [activeIsep, selectedPartition, selectedPartitionRecord, partitionCameras]);
+  }, [activeIsep, selectedPartition, selectedPartitionRecord?.id, selectedPartitionRecord?.partition_name, selectedPartitionRecord?.description]);
 
   const refreshPartitionStatus = async () => {
     if (!activeIsep) return;
@@ -1088,10 +1229,8 @@ function ClientsView({
 
   const sendPartitionCommand = async (cmd: "armar" | "desarmar", partition: string) => {
     if (!activeIsep || !partition) return;
-    localStorage.setItem(`centralCommandPassword:${activeIsep}`, commandPassword);
-    setCommandResult(`${cmd === "armar" ? "Armando" : "Desarmando"} particao ${partition}...`);
+    setCommandResult("");
     await onPartitionCommand(activeIsep, cmd, Number(partition));
-    setCommandResult(`${cmd === "armar" ? "Arme" : "Desarme"} enviado. Status sera atualizado automaticamente.`);
   };
 
   const statusForPartition = (partition: string) => {
@@ -1128,55 +1267,85 @@ function ClientsView({
   const submitUser = async (event: FormEvent) => {
     event.preventDefault();
     if (!activeIsep) return;
-    await api.post("/users", { ...userForm, isep: activeIsep, account: activeIsep });
-    setUserForm({ partition: "1", user_number: "", user_name: "", description: "" });
-    await onChanged();
+    await save(async () => {
+      const userNumber = userForm.user_number.trim();
+      const userName = userForm.user_name.trim();
+      if (!userNumber || !userName || (!editingUser && selectedPartitionUsers.some((user) => user.user_number === userNumber))) {
+        setFormError("Informe um número disponível nesta partição e o nome do usuário.");
+        return;
+      }
+      await api.post("/users", {
+        ...userForm, partition: selectedPartition, user_number: userNumber, user_name: userName,
+        isep: editingUser ? editingUser.isep ?? undefined : activeIsep,
+        account: editingUser?.account ?? activeIsep
+      });
+      resetUserForm();
+      await onChanged();
+    });
   };
 
   const submitCentral = async (event: FormEvent) => {
     event.preventDefault();
-    await api.post("/buildings", centralForm);
-    setSelectedIsep(centralForm.isep);
-    setCentralForm({ isep: "", building_name: "", description: "" });
-    await onChanged();
+    await save(async () => {
+      const isep = centralForm.isep.trim().toUpperCase();
+      const name = centralForm.building_name.trim();
+      if (!isep || !name || buildings.some((central) => central.isep.toUpperCase() === isep)) {
+        setFormError("Informe um nome e um ISEP ainda não cadastrado.");
+        return;
+      }
+      const { data } = await api.post<Building>("/buildings", { ...centralForm, isep, building_name: name });
+      await onChanged();
+      setSelectedIsep(data.isep);
+      setCentralForm({ isep: "", building_name: "", description: "" });
+      setCreatingCentral(false);
+    });
   };
 
   const submitPartition = async (event: FormEvent) => {
     event.preventDefault();
     if (!activeIsep) return;
-    await api.post("/central-partitions", { ...partitionForm, isep: activeIsep });
-    await onChanged();
+    await save(async () => {
+      await api.post("/central-partitions", { ...partitionForm, isep: activeIsep });
+      await onChanged();
+    });
   };
 
   const submitZone = async (event: FormEvent) => {
     event.preventDefault();
     if (!activeIsep) return;
-    await api.post("/central-zones", { ...zoneForm, isep: activeIsep });
-    setZoneForm({ partition: selectedPartition, zone: "", zone_name: "", description: "" });
-    await onChanged();
+    await save(async () => {
+      await api.post("/central-zones", { ...zoneForm, isep: activeIsep });
+      setZoneForm({ partition: selectedPartition, zone: "", zone_name: "", description: "" });
+      await onChanged();
+    });
   };
 
   const submitPartitionCameras = async (event: FormEvent) => {
     event.preventDefault();
     if (!activeIsep) return;
-    await api.post("/central-camera-mappings/partition", {
-      isep: activeIsep,
-      partition: partitionCameraForm.partition,
-      camera_ids: parseCameraIds(partitionCameraForm.camera_ids)
+    await save(async () => {
+      await api.post("/central-camera-mappings/partition", {
+        isep: activeIsep,
+        partition: partitionCameraForm.partition,
+        camera_ids: parseCameraIds(partitionCameraForm.camera_ids)
+      });
+      await onChanged();
     });
-    await onChanged();
   };
 
   const submitZoneCameras = async (event: FormEvent) => {
     event.preventDefault();
     if (!activeIsep) return;
-    await api.post("/central-camera-mappings/zone", {
-      isep: activeIsep,
-      partition: zoneCameraForm.partition,
-      zone: zoneCameraForm.zone,
-      camera_ids: parseCameraIds(zoneCameraForm.camera_ids)
+    await save(async () => {
+      await api.post("/central-camera-mappings/zone", {
+        isep: activeIsep,
+        partition: zoneCameraForm.partition,
+        zone: zoneCameraForm.zone,
+        camera_ids: parseCameraIds(zoneCameraForm.camera_ids)
+      });
+      await onChanged();
+      setZoneCameraForm({ partition: selectedPartition, zone: "", camera_ids: "" });
     });
-    await onChanged();
   };
 
   const editPartitionCameras = (partition: string) => {
@@ -1187,6 +1356,7 @@ function ClientsView({
   };
 
   const editZoneCameras = (partition: string, zone: string) => {
+    setFormError("");
     setZoneCameraForm({
       partition,
       zone,
@@ -1196,23 +1366,31 @@ function ClientsView({
 
   return (
     <Stack spacing={2}>
-      <Paper sx={{ p: 2 }}>
-        <Stack component="form" spacing={2} onSubmit={submitCentral}>
-          <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ xs: "stretch", md: "center" }}>
-            <Box sx={{ minWidth: 180 }}>
-              <Typography variant="h6">Centrais</Typography>
-              <Typography variant="body2" color="text.secondary">Crie a central e depois configure tudo dentro do card dela.</Typography>
-            </Box>
+      <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={2}>
+        <Typography variant="h6">Centrais ({buildings.length})</Typography>
+        <Button variant="contained" startIcon={<Add />} onClick={() => { setFormError(""); setCreatingCentral(true); }}>Nova central</Button>
+      </Stack>
+      {formError && !creatingCentral && !zoneCameraForm.zone && <Alert severity="error">{formError}</Alert>}
+      <Dialog open={creatingCentral} fullWidth maxWidth="xs" onClose={saving ? undefined : () => setCreatingCentral(false)}>
+        <form onSubmit={submitCentral}>
+          <DialogTitle>Nova central</DialogTitle>
+          <DialogContent dividers>
+          <Stack spacing={2}>
+            {formError && <Alert severity="error">{formError}</Alert>}
             <TextField size="small" label="ISEP da central" value={centralForm.isep} onChange={(e) => setCentralForm({ ...centralForm, isep: e.target.value })} required />
             <TextField size="small" label="Nome da central" value={centralForm.building_name} onChange={(e) => setCentralForm({ ...centralForm, building_name: e.target.value })} required />
             <TextField size="small" label="Observacao" value={centralForm.description} onChange={(e) => setCentralForm({ ...centralForm, description: e.target.value })} />
-            <Button type="submit" variant="contained" startIcon={<Add />} sx={{ minHeight: 40 }}>Salvar central</Button>
           </Stack>
-        </Stack>
-      </Paper>
+          </DialogContent>
+          <DialogActions>
+            <Button disabled={saving} onClick={() => setCreatingCentral(false)}>Cancelar</Button>
+            <Button disabled={saving} type="submit" variant="contained">Cadastrar central</Button>
+          </DialogActions>
+        </form>
+      </Dialog>
 
       <Grid container spacing={2}>
-        <Grid item xs={12} lg={4}>
+        <Grid item xs={12} md={4} lg={3}>
           <Grid container spacing={2}>
             {buildings.map((central) => {
               const centralEnabledPartitions = centralPartitions
@@ -1221,10 +1399,10 @@ function ClientsView({
               const isSelected = central.isep === activeIsep;
 
               return (
-                <Grid item xs={12} sm={6} lg={12} key={central.id}>
+                <Grid item xs={12} sm={6} md={12} key={central.id}>
                   <Paper
                     className="client-central-card"
-                    onClick={() => setSelectedIsep(central.isep)}
+                    onClick={() => { setShowAllPartitions(false); setSelectedIsep(central.isep); }}
                     sx={{
                       p: 2,
                       cursor: "pointer",
@@ -1262,7 +1440,7 @@ function ClientsView({
           </Grid>
         </Grid>
 
-        <Grid item xs={12} lg={8}>
+        <Grid item xs={12} md={8} lg={9}>
           <Paper sx={{ p: { xs: 2, md: 3 } }}>
             {selectedCentral ? (
               <Stack spacing={3}>
@@ -1273,14 +1451,35 @@ function ClientsView({
                   </Box>
                   <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
                     <TextField
-                      label="Senha de arme/desarme"
+                      label={passwordSaved ? "Nova senha de controle remoto" : "Senha de controle remoto"}
                       type="password"
+                      autoComplete="new-password"
                       value={commandPassword}
                       onChange={(event) => setCommandPassword(event.target.value)}
                       size="small"
+                      helperText={passwordSaved ? "Senha salva neste navegador" : "Nenhuma senha salva neste navegador"}
                     />
+                    <Button variant="outlined" disabled={!commandPassword.trim()} onClick={() => {
+                      try {
+                        localStorage.setItem(`centralCommandPassword:${activeIsep}`, commandPassword.trim());
+                        setPasswordSaved(true);
+                        setCommandPassword("");
+                        setCommandResult("Senha de controle remoto salva.");
+                      } catch {
+                        setCommandResult("Não foi possível salvar a senha neste navegador.");
+                      }
+                    }}>Salvar senha</Button>
+                    {passwordSaved && <Button onClick={() => {
+                      try {
+                        localStorage.removeItem(`centralCommandPassword:${activeIsep}`);
+                        setPasswordSaved(false);
+                        setCommandPassword("");
+                        setCommandResult("Senha removida deste navegador.");
+                      } catch {
+                        setCommandResult("Não foi possível remover a senha deste navegador.");
+                      }
+                    }}>Remover senha salva</Button>}
                     <Button variant="outlined" startIcon={<Refresh />} disabled={!activeIsep || loadingIsep === activeIsep} onClick={() => {
-                      localStorage.setItem(`centralCommandPassword:${activeIsep}`, commandPassword);
                       refreshPartitionStatus().catch((error) => setCommandResult(error.message));
                     }}>
                       Atualizar
@@ -1292,12 +1491,14 @@ function ClientsView({
                 {statusMessage ? <Alert severity="info">{statusMessage}</Alert> : null}
 
                 <Box>
-                  <Typography variant="subtitle1" fontWeight={700}>Particoes habilitadas</Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                    Marque somente as particoes ativas nessa central. Ao desmarcar, zonas e cameras daquela particao saem do cadastro.
-                  </Typography>
+                  <Stack direction="row" useFlexGap flexWrap="wrap" justifyContent="space-between" sx={{ mb: 1 }}>
+                    <Typography variant="subtitle1" fontWeight={700}>Partições em uso ({filteredPartitions.length})</Typography>
+                    <Button size="small" onClick={() => setShowAllPartitions(!showAllPartitions)}>
+                      {showAllPartitions ? "Concluir configuração" : "Configurar partições"}
+                    </Button>
+                  </Stack>
                   <Box className="enabled-partition-grid">
-                    {partitionNumbers.map((partition) => {
+                    {partitionNumbers.filter((partition) => showAllPartitions || isPartitionEnabled(partition)).map((partition) => {
                       const enabled = isPartitionEnabled(partition);
                       const status = statusForPartition(partition);
                       return (
@@ -1306,11 +1507,15 @@ function ClientsView({
                           className={`enabled-partition-card ${enabled ? "enabled" : ""} ${selectedPartition === partition ? "selected" : ""}`}
                           onClick={() => enabled && setSelectedPartition(partition)}
                         >
-                          <FormControlLabel
-                            control={<Checkbox checked={enabled} onChange={(event) => togglePartition(partition, event.target.checked).catch((error) => setCommandResult(error.message))} />}
+                          {showAllPartitions ? <FormControlLabel
+                            control={<Checkbox disabled={saving} checked={enabled} onChange={(event) => {
+                              const checked = event.target.checked;
+                              if (!checked && !window.confirm(`Remover P${partition} da central? Zonas e vínculos de câmeras podem ser removidos.`)) return;
+                              void save(() => togglePartition(partition, checked));
+                            }} />}
                             label={`P${partition}`}
                             onClick={(event) => event.stopPropagation()}
-                          />
+                          /> : <Button size="small" onClick={() => setSelectedPartition(partition)} aria-pressed={selectedPartition === partition}>P{partition}</Button>}
                           <Typography variant="body2" color="text.secondary">
                             {enabled ? selectedCentral && (filteredPartitions.find((item) => item.partition === partition)?.partition_name ?? `Particao ${partition}`) : "Nao habilitada"}
                           </Typography>
@@ -1342,7 +1547,6 @@ function ClientsView({
                       <Grid item xs={12} md={6}>
                         <Stack component="form" spacing={2} onSubmit={submitPartition}>
                           <Typography variant="subtitle2">Dados da particao</Typography>
-                          <TextField label="Particao" value={partitionForm.partition} InputProps={{ readOnly: true }} required />
                           <TextField label="Nome da particao" value={partitionForm.partition_name} onChange={(e) => setPartitionForm({ ...partitionForm, partition_name: e.target.value })} required />
                           <TextField label="Observacao" value={partitionForm.description} onChange={(e) => setPartitionForm({ ...partitionForm, description: e.target.value })} />
                           <Button type="submit" variant="outlined" startIcon={<Edit />}>Salvar nome</Button>
@@ -1351,14 +1555,11 @@ function ClientsView({
                       <Grid item xs={12} md={6}>
                         <Stack component="form" spacing={2} onSubmit={submitPartitionCameras}>
                           <Typography variant="subtitle2">Grupo de cameras da particao</Typography>
-                          <TextField label="Particao" value={partitionCameraForm.partition} InputProps={{ readOnly: true }} required />
-                          <TextField
-                            label="IDs das cameras ISS"
-                            value={partitionCameraForm.camera_ids}
-                            onChange={(e) => setPartitionCameraForm({ ...partitionCameraForm, camera_ids: e.target.value })}
-                            placeholder="336, 456, 698"
+                          <CameraPicker cameras={cameras}
+                            ids={partitionCameraForm.camera_ids}
+                            onChange={(camera_ids) => setPartitionCameraForm({ ...partitionCameraForm, camera_ids })}
                           />
-                          <Button type="submit" variant="outlined" startIcon={<CameraAlt />}>Salvar grupo</Button>
+                          <Button disabled={saving} type="submit" variant="outlined" startIcon={<CameraAlt />}>Salvar grupo</Button>
                         </Stack>
                       </Grid>
                     </Grid>
@@ -1369,7 +1570,6 @@ function ClientsView({
                       <Grid item xs={12} md={5}>
                         <Stack component="form" spacing={2} onSubmit={submitZone}>
                           <Typography variant="subtitle2">Adicionar zona em P{selectedPartition}</Typography>
-                          <TextField label="Particao" value={zoneForm.partition} InputProps={{ readOnly: true }} required />
                           <TextField label="Zona" value={zoneForm.zone} onChange={(e) => setZoneForm({ ...zoneForm, zone: e.target.value })} required />
                           <TextField label="Nome da zona" value={zoneForm.zone_name} onChange={(e) => setZoneForm({ ...zoneForm, zone_name: e.target.value })} required />
                           <TextField label="Observacao" value={zoneForm.description} onChange={(e) => setZoneForm({ ...zoneForm, description: e.target.value })} />
@@ -1396,7 +1596,10 @@ function ClientsView({
                                   </Stack>
                                   <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap" sx={{ mt: 1 }}>
                                     {zoneCameraIds.length > 0 ? (
-                                      zoneCameraIds.map((cameraId) => <Chip key={cameraId} size="small" icon={<CameraAlt />} label={cameraId} />)
+                                      zoneCameraIds.map((cameraId) => {
+                                        const camera = cameras.find((item) => item.iss_camera_id === cameraId);
+                                        return <Chip key={cameraId} size="small" icon={<CameraAlt />} label={camera ? `${camera.camera_name} (${cameraId})` : cameraId} />;
+                                      })
                                     ) : (
                                       <Typography variant="body2" color="text.secondary">Sem camera vinculada</Typography>
                                     )}
@@ -1409,18 +1612,20 @@ function ClientsView({
                           )}
                         </Stack>
 
-                        <Stack component="form" spacing={2} onSubmit={submitZoneCameras} sx={{ mt: 2 }}>
-                          <Typography variant="subtitle2">Vincular cameras a zona</Typography>
-                          <TextField label="Particao" value={zoneCameraForm.partition} InputProps={{ readOnly: true }} required />
-                          <TextField label="Zona" value={zoneCameraForm.zone} onChange={(e) => setZoneCameraForm({ ...zoneCameraForm, zone: e.target.value })} required />
-                          <TextField
-                            label="IDs das cameras ISS"
-                            value={zoneCameraForm.camera_ids}
-                            onChange={(e) => setZoneCameraForm({ ...zoneCameraForm, camera_ids: e.target.value })}
-                            placeholder="25, 26, 31"
-                          />
-                          <Button type="submit" variant="outlined" startIcon={<LinkIcon />}>Salvar vinculo da zona</Button>
-                        </Stack>
+                        <Dialog open={Boolean(zoneCameraForm.zone)} fullWidth maxWidth="sm" onClose={saving ? undefined : () => setZoneCameraForm({ partition: selectedPartition, zone: "", camera_ids: "" })}>
+                          <form onSubmit={submitZoneCameras}>
+                            <DialogTitle>Câmeras · P{selectedPartition} / Z{zoneCameraForm.zone}</DialogTitle>
+                            <DialogContent dividers>
+                              {formError && <Alert severity="error" sx={{ mb: 2 }}>{formError}</Alert>}
+                              <CameraPicker cameras={cameras} ids={zoneCameraForm.camera_ids}
+                                onChange={(camera_ids) => setZoneCameraForm({ ...zoneCameraForm, camera_ids })} />
+                            </DialogContent>
+                            <DialogActions>
+                              <Button disabled={saving} onClick={() => setZoneCameraForm({ partition: selectedPartition, zone: "", camera_ids: "" })}>Cancelar</Button>
+                              <Button disabled={saving} type="submit" variant="contained" startIcon={<LinkIcon />}>Salvar vínculo</Button>
+                            </DialogActions>
+                          </form>
+                        </Dialog>
                       </Grid>
                     </Grid>
 
@@ -1429,23 +1634,29 @@ function ClientsView({
                     <Grid container spacing={2}>
                       <Grid item xs={12} md={5}>
                         <Stack component="form" spacing={2} onSubmit={submitUser}>
-                          <Typography variant="subtitle2">Usuarios da particao</Typography>
-                          <TextField label="Particao" value={userForm.partition} InputProps={{ readOnly: true }} required />
-                          <TextField label="Numero do usuario" value={userForm.user_number} onChange={(e) => setUserForm({ ...userForm, user_number: e.target.value })} required />
+                          <Typography variant="subtitle2">{editingUser ? `Editar usuário · P${selectedPartition}` : `Novo usuário · P${selectedPartition}`}</Typography>
+                          <TextField label="Número do usuário" value={userForm.user_number} onChange={(e) => setUserForm({ ...userForm, user_number: e.target.value })} disabled={Boolean(editingUser)} required />
                           <TextField label="Nome do usuario" value={userForm.user_name} onChange={(e) => setUserForm({ ...userForm, user_name: e.target.value })} required />
                           <TextField label="Observacao" value={userForm.description} onChange={(e) => setUserForm({ ...userForm, description: e.target.value })} />
-                          <Button type="submit" variant="outlined" startIcon={<Add />}>Salvar usuario</Button>
+                          <Button disabled={saving} type="submit" variant="outlined" startIcon={editingUser ? <Edit /> : <Add />}>Salvar usuário</Button>
+                          {editingUser && <Button disabled={saving} onClick={resetUserForm}>Cancelar edição</Button>}
                         </Stack>
                       </Grid>
                       <Grid item xs={12} md={7}>
-                        <Typography variant="subtitle2" sx={{ mb: 1 }}>Usuarios cadastrados</Typography>
+                        <Typography variant="subtitle2" sx={{ mb: 1 }}>Usuários cadastrados ({selectedPartitionUsers.length})</Typography>
+                        <TextField fullWidth size="small" label="Buscar por nome ou número" value={userSearch} onChange={(e) => setUserSearch(e.target.value)} />
                         <List dense>
-                          {selectedPartitionUsers.length > 0 ? selectedPartitionUsers.map((user) => (
+                          {matchingUsers.length > 0 ? matchingUsers.map((user) => (
                             <ListItem key={user.id} divider disableGutters>
                               <ListItemText primary={`Usuario ${user.user_number} · ${user.user_name}`} secondary={user.description || "Sem observacao"} />
+                              <IconButton aria-label={`Editar usuário ${user.user_number}`} disabled={saving} onClick={() => {
+                                setFormError("");
+                                setEditingUser(user);
+                                setUserForm({ partition: user.partition, user_number: user.user_number, user_name: user.user_name, description: user.description ?? "" });
+                              }}><Edit /></IconButton>
                             </ListItem>
                           )) : (
-                            <Typography variant="body2" color="text.secondary">Nenhum usuario cadastrado nesta particao.</Typography>
+                            <Typography variant="body2" color="text.secondary">Nenhum usuário encontrado.</Typography>
                           )}
                         </List>
                       </Grid>
@@ -1462,6 +1673,19 @@ function ClientsView({
         </Grid>
       </Grid>
     </Stack>
+  );
+}
+
+function CameraPicker({ cameras, ids, onChange }: { cameras: Camera[]; ids: string; onChange: (value: string) => void }) {
+  const labels = new Map(cameras.map((camera) => [camera.iss_camera_id, camera.camera_name]));
+  return (
+    <Autocomplete multiple freeSolo fullWidth
+      options={Array.from(labels.keys())}
+      value={parseCameraIds(ids)}
+      getOptionLabel={(id) => labels.has(id) ? `${labels.get(id)} (${id})` : id}
+      onChange={(_, values) => onChange(Array.from(new Set(values.flatMap(parseCameraIds))).join(", "))}
+      renderInput={(params) => <TextField {...params} label="Câmeras ISS" helperText="Busque por nome ou ID. Para incluir um ID avulso, pressione Enter." />}
+    />
   );
 }
 
