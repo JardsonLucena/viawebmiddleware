@@ -376,10 +376,11 @@ function App({ dark, onToggleTheme }: { dark: boolean; onToggleTheme: () => void
     });
   }, []);
 
-  const receiverCommand = async (isep: string, command: Record<string, unknown>) => {
+  const receiverCommand = async (isep: string, command: Record<string, unknown>, registeredOnly = false) => {
     const response = await api.post<ReceiverCommandResponse>("/receiver/command", {
       isepId: isep,
-      command
+      command,
+      registeredOnly
     });
     return response.data;
   };
@@ -387,7 +388,7 @@ function App({ dark, onToggleTheme }: { dark: boolean; onToggleTheme: () => void
   const refreshCentralStatus = async (isep: string, silent = false) => {
     if (!silent) setCentralStatusLoading(isep);
     try {
-      const response = await receiverCommand(isep, { cmd: "particoes" });
+      const response = await receiverCommand(isep, { cmd: "particoes" }, true);
       const statuses = getPartitionStatuses(response);
       setStatusesByIsep((current) => ({ ...current, [isep]: statuses }));
       setUpdatedAtByIsep((current) => ({ ...current, [isep]: new Date().toISOString() }));
@@ -402,12 +403,14 @@ function App({ dark, onToggleTheme }: { dark: boolean; onToggleTheme: () => void
   };
 
   const refreshAllCentralStatuses = async (silent = false) => {
-    if (centralRefreshRunning.current || buildings.length === 0) return;
+    if (centralRefreshRunning.current) return;
     centralRefreshRunning.current = true;
     if (!silent) setCentralStatusMessage("Atualizando centrais...");
 
     try {
-      for (const central of buildings) {
+      const { data: registeredCentrais } = await api.get<Building[]>("/buildings");
+      setBuildings(registeredCentrais);
+      for (const central of registeredCentrais) {
         setCentralStatusLoading(central.isep);
         await refreshCentralStatus(central.isep, true);
       }
