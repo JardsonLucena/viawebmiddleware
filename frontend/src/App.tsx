@@ -164,6 +164,10 @@ function isEventHandled(event: EventRecord) {
   return event.status === "ENCERRADO" || Boolean(event.treatments?.some((treatment) => treatment.action === "ENCERRADO"));
 }
 
+function needsTreatment(event: EventRecord) {
+  return isIntrusionAlarmEvent(event) && !isEventHandled(event);
+}
+
 function getReceiverCommandItems(response: unknown) {
   const body = response as { response?: { resposta?: unknown } };
   const receiverResponse = body.response;
@@ -645,7 +649,7 @@ function App({ dark, onToggleTheme }: { dark: boolean; onToggleTheme: () => void
           onSave={async (action, note) => {
             const { data } = await api.post<EventRecord>(`/events/${treatmentEvent.id}/treatments`, { action, note });
             setEvents((current) => current.map((event) => event.id === data.id ? data : event));
-            setTreatmentId(null);
+            if (!needsTreatment(data)) setTreatmentId(null);
           }}
         />
       )}
@@ -690,8 +694,8 @@ function DashboardView({
 }) {
   const [dashboardTab, setDashboardTab] = useState(0);
   const [queueTab, setQueueTab] = useState(0);
-  const pendingEvents = events.filter((event) => !isEventHandled(event));
-  const handledEvents = events.filter(isEventHandled);
+  const pendingEvents = events.filter(needsTreatment);
+  const handledEvents = events.filter((event) => !needsTreatment(event));
   const stats = [
     ["Na fila", pendingEvents.length],
     ["Historico", handledEvents.length],
@@ -796,8 +800,8 @@ function OperatorView({
 }) {
   const [operatorTab, setOperatorTab] = useState(0);
   const [queueTab, setQueueTab] = useState(0);
-  const pendingEvents = events.filter((event) => !isEventHandled(event));
-  const handledEvents = events.filter(isEventHandled);
+  const pendingEvents = events.filter(needsTreatment);
+  const handledEvents = events.filter((event) => !needsTreatment(event));
   const oldestPending = pendingEvents.reduce<EventRecord | undefined>((oldest, event) =>
     !oldest || Date.parse(event.received_at) < Date.parse(oldest.received_at) ? event : oldest, undefined);
 
@@ -996,17 +1000,21 @@ function TreatmentDialog({ event, onClose, onShowCamera, onSave }: {
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const readOnly = isEventHandled(event);
+  const readOnly = !needsTreatment(event);
   const submit = async (formEvent: FormEvent) => {
     formEvent.preventDefault();
     if (saving || readOnly || (action !== "RECONHECIDO" && !note.trim())) return;
     setSaving(true);
     setError("");
-    try { await onSave(action, note.trim()); }
+    try {
+      await onSave(action, note.trim());
+      setNote("");
+      if (action === "RECONHECIDO") setAction("NOTA");
+    }
     catch {
       setError("Falha ao registrar a tratativa. Confira o histórico antes de tentar novamente.");
-      setSaving(false);
     }
+    finally { setSaving(false); }
   };
   return (
     <Dialog open fullWidth maxWidth="sm" onClose={saving ? undefined : onClose}>
@@ -1015,6 +1023,8 @@ function TreatmentDialog({ event, onClose, onShowCamera, onSave }: {
         <DialogContent dividers>
           <Stack spacing={2}>
             <Typography>{event.payload?.interpretation?.origin ?? event.account} · {event.payload?.interpretation?.display ?? event.event_code}</Typography>
+            <Typography variant="body2" color="text.secondary">{formatDate(event.received_at)} · P{event.partition} / Z{event.zone}</Typography>
+            <Chip size="small" sx={{ alignSelf: "flex-start" }} label={readOnly ? "Histórico" : event.status === "EM_TRATATIVA" ? "Em tratativa" : "Intrusão pendente"} />
             {error && <Alert severity="error">{error}</Alert>}
             {!readOnly && <>
               <TextField select SelectProps={{ native: true }} label="Ação" value={action} onChange={(e) => setAction(e.target.value)} disabled={saving}>
@@ -1036,7 +1046,7 @@ function TreatmentDialog({ event, onClose, onShowCamera, onSave }: {
         <DialogActions sx={{ flexWrap: "wrap" }}>
           <Button startIcon={<CameraAlt />} onClick={onShowCamera}>Mostrar câmeras</Button>
           <Button onClick={onClose} disabled={saving}>Fechar</Button>
-          {!readOnly && <Button type="submit" variant="contained" disabled={saving}>Registrar</Button>}
+          {!readOnly && <Button type="submit" variant="contained" disabled={saving}>{treatmentActions[action as keyof typeof treatmentActions]}</Button>}
         </DialogActions>
       </form>
     </Dialog>

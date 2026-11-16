@@ -91,13 +91,6 @@ function statusAfterTreatment(currentStatus: string, action: string) {
   return currentStatus || "PENDENTE";
 }
 
-function eventStatusOrder(status: string) {
-  if (status === "PENDENTE") return 0;
-  if (status === "EM_TRATATIVA") return 1;
-  if (status === "ENCERRADO") return 2;
-  return 3;
-}
-
 export type EventInput = {
   account: string;
   partition: string;
@@ -564,13 +557,13 @@ class PrismaDataStore implements DataStore {
   async listEvents(limit: number) {
     const [pendingEvents, handledEvents] = await Promise.all([
       (prisma as any).event.findMany({
-        where: { status: { not: "ENCERRADO" } },
+        where: { event_code: "1130", status: { not: "ENCERRADO" } },
         orderBy: { received_at: "desc" },
         take: limit,
         include: { treatments: { orderBy: { created_at: "asc" } } }
       }),
       (prisma as any).event.findMany({
-        where: { status: "ENCERRADO" },
+        where: { OR: [{ event_code: { not: "1130" } }, { status: "ENCERRADO" }] },
         orderBy: { received_at: "desc" },
         take: limit,
         include: { treatments: { orderBy: { created_at: "asc" } } }
@@ -1047,9 +1040,9 @@ class MemoryDataStore implements DataStore {
   async listEvents(limit: number) {
     const events = this.events
       .map((event) => this.withTreatments(event))
-      .sort((a, b) => eventStatusOrder(a.status) - eventStatusOrder(b.status) || b.received_at.getTime() - a.received_at.getTime());
-    const pendingEvents = events.filter((event) => event.status !== "ENCERRADO").slice(0, limit);
-    const handledEvents = events.filter((event) => event.status === "ENCERRADO").slice(0, limit);
+      .sort((a, b) => b.received_at.getTime() - a.received_at.getTime());
+    const pendingEvents = events.filter((event) => event.event_code === "1130" && event.status !== "ENCERRADO").slice(0, limit);
+    const handledEvents = events.filter((event) => event.event_code !== "1130" || event.status === "ENCERRADO").slice(0, limit);
     return [...pendingEvents, ...handledEvents];
   }
 
