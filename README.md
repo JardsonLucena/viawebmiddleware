@@ -214,3 +214,55 @@ O middleware grava o evento com um dos status:
 3. Vincule um sensor a uma ou mais câmeras.
 4. Ative `VIAWEB_RECEIVER_ENABLED=true` para receber eventos reais do Receiver ou envie um evento para `POST /events` em teste manual.
 5. Acompanhe execução, falhas e tempo médio no dashboard.
+# Tratativa em lote
+
+Na fila de intrusoes, marque os eventos pelas caixas de selecao. Use
+**Selecionar grupo** para selecionar os eventos exibidos da mesma central,
+particao ou zona, conforme o campo **Agrupar selecao**. **Selecionar exibidos**
+seleciona apenas a janela carregada na interface.
+
+Em **Tratar selecionados**, escolha a acao e informe uma observacao comum.
+Cada evento recebe seu proprio registro de atividade. Reconhecimento e notas
+mantem os eventos em atendimento. Encerramento, alarme real e falso alarme
+movem os eventos para o historico. Falhas parciais permanecem selecionadas.
+Confira o historico antes de repetir uma operacao com falha de conexao.
+
+# Servico Windows
+
+O instalador em `scripts/install-windows-service.ps1` usa WinSW 2.x.
+Baixe `WinSW-x64.exe` da distribuicao oficial
+<https://github.com/winsw/winsw/releases/tag/v2.12.0>.
+Instale Node.js para todos os usuarios da maquina e configure
+`backend/.env` antes da instalacao.
+
+No PowerShell como Administrador, na pasta do projeto:
+
+```powershell
+npm install
+npm run build
+# Pare o npm start anterior com Ctrl+C antes de iniciar o servico.
+powershell -ExecutionPolicy Bypass -File .\scripts\install-windows-service.ps1 -WinSwPath C:\Downloads\WinSW-x64.exe
+Get-Service ViawebMiddleware
+```
+
+O servico inicia automaticamente com o Windows e reinicia apos falha.
+Executa em LocalSystem, carrega o .env a partir da pasta backend e grava
+logs com rotacao em `windows-service/logs`. Credenciais salvas no navegador
+continuam vinculadas ao perfil do operador. O diretorio do projeto e o Node.js
+devem estar disponiveis para a conta do servico.
+
+Para atualizar:
+
+```powershell
+Stop-Service ViawebMiddleware
+git pull --ff-only
+npm run build
+Start-Service ViawebMiddleware
+```
+
+Para remover o servico:
+
+```powershell
+Stop-Service ViawebMiddleware
+.\windows-service\ViawebMiddleware.exe uninstall
+```

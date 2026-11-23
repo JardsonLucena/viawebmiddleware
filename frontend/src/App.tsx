@@ -1064,6 +1064,47 @@ function EventList({
   onShowEvent: (eventId: number) => Promise<void>;
   onHandleEvent: (eventId: number) => Promise<void>;
 }) {
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [groupBy, setGroupBy] = useState("zone");
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [batchAction, setBatchAction] = useState("FALSO_ALARME");
+  const [batchNote, setBatchNote] = useState("");
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchMessage, setBatchMessage] = useState("");
+  const [completedIds, setCompletedIds] = useState<number[]>([]);
+  const pending = events.filter((event) => needsTreatment(event) && !completedIds.includes(event.id));
+  const selected = pending.filter((event) => selectedIds.includes(event.id));
+  const groupKey = (event: EventRecord) => {
+    const central = event.payload?.interpretation?.isep ?? event.account;
+    if (groupBy === "central") return central;
+    if (groupBy === "partition") return `${central}/${event.partition}`;
+    return `${central}/${event.partition}/${event.zone}`;
+  };
+  const applyBatch = async (formEvent: FormEvent) => {
+    formEvent.preventDefault();
+    if (batchBusy || !selected.length || (batchAction !== "RECONHECIDO" && !batchNote.trim())) return;
+    setBatchBusy(true);
+    const failed: number[] = [];
+    const completed: number[] = [];
+    const snapshot = [...selected];
+    for (const event of snapshot) {
+      try {
+        await api.post(`/events/${event.id}/treatments`, {
+          action: batchAction,
+          note: `Tratativa em lote (${snapshot.length} eventos). ${batchNote.trim()}`
+        });
+        completed.push(event.id);
+      } catch { failed.push(event.id); }
+    }
+    if (["FALSO_ALARME", "ALARME_REAL", "ENCERRADO"].includes(batchAction)) {
+      setCompletedIds((current) => [...current, ...completed]);
+    }
+    setSelectedIds(failed);
+    setBatchMessage(`${completed.length} registrados. ${failed.length} falharam e continuam selecionados. Atualize a fila para conferir o resultado antes de repetir.`);
+    setBatchBusy(false);
+    setBatchOpen(false);
+    setBatchNote("");
+  };
   if (events.length === 0) return <Typography color="text.secondary">{history ? "Nenhum evento tratado." : "Nenhum evento pendente."}</Typography>;
 
   const ordered = history ? events : [...events].sort((a, b) =>
@@ -1071,9 +1112,42 @@ function EventList({
     Date.parse(a.received_at) - Date.parse(b.received_at) || a.id - b.id
   );
   return (
+    <>
+    {!history && <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center" sx={{ mb: 2 }}>
+      <FormControlLabel label={`Selecionar exibidos (${pending.length})`} control={<Checkbox
+        checked={pending.length > 0 && selected.length === pending.length}
+        indeterminate={selected.length > 0 && selected.length < pending.length}
+        disabled={batchBusy}
+        onChange={(_, checked) => setSelectedIds(checked ? pending.map((event) => event.id) : [])} />} />
+      <TextField select size="small" label="Agrupar seleção" value={groupBy} onChange={(e) => setGroupBy(e.target.value)} SelectProps={{ native: true }}>
+        <option value="central">Central</option><option value="partition">Central e partição</option><option value="zone">Central, partição e zona</option>
+      </TextField>
+      <Button variant="contained" disabled={!selected.length || batchBusy} onClick={() => setBatchOpen(true)}>Tratar selecionados ({selected.length})</Button>
+    </Stack>}
+    {batchMessage && <Alert severity="info" sx={{ mb: 2 }}>{batchMessage}</Alert>}
+    <Dialog open={batchOpen} fullWidth maxWidth="sm" onClose={batchBusy ? undefined : () => setBatchOpen(false)}>
+      <form onSubmit={applyBatch}>
+        <DialogTitle>Tratar {selected.length} eventos selecionados</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2}>
+            <Typography variant="body2">{Array.from(new Set(selected.map((event) => event.payload?.interpretation?.origin ?? event.account))).join(", ")}</Typography>
+            <TextField select label="Ação para o lote" value={batchAction} onChange={(e) => setBatchAction(e.target.value)} SelectProps={{ native: true }} disabled={batchBusy}>
+              {Object.entries(treatmentActions).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </TextField>
+            <TextField label="Observação comum" multiline minRows={3} value={batchNote} onChange={(e) => setBatchNote(e.target.value)} required={batchAction !== "RECONHECIDO"} disabled={batchBusy} />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button disabled={batchBusy} onClick={() => setBatchOpen(false)}>Cancelar</Button>
+          <Button type="submit" variant="contained" disabled={batchBusy || !selected.length}>{batchBusy ? "Registrando..." : "Confirmar tratativa do lote"}</Button>
+        </DialogActions>
+      </form>
+    </Dialog>
     <List dense>
       {ordered.map((event) => (
         <ListItem key={event.id} divider sx={{ flexWrap: "wrap", gap: 1, py: 1 }}>
+          {!history && <Checkbox aria-label={`Selecionar evento ${event.id}`} disabled={batchBusy || completedIds.includes(event.id)} checked={selected.some((item) => item.id === event.id)}
+            onChange={(_, checked) => setSelectedIds((ids) => checked ? [...ids, event.id] : ids.filter((id) => id !== event.id))} />}
           <Box sx={{ mr: 1.5 }} className={`status-dot ${eventListStatusClass(event)}`} />
           <ListItemText
             primary={`${event.payload?.interpretation?.origin ?? event.payload?.interpretation?.accountName ?? event.account} - ${event.payload?.interpretation?.display ?? event.event_code}`}
@@ -1084,6 +1158,10 @@ function EventList({
             }
           />
           <Stack direction="row" useFlexGap flexWrap="wrap" spacing={0.5}>
+            {!history && <Button size="small" disabled={batchBusy} onClick={() => {
+              const ids = pending.filter((item) => groupKey(item) === groupKey(event)).map((item) => item.id);
+              setSelectedIds((current) => Array.from(new Set([...current, ...ids])));
+            }}>Selecionar grupo</Button>}
             {isIntrusionAlarmEvent(event) && <Chip size="small" color="error" label="Intrusão" />}
             {event.status === "EM_TRATATIVA" && <Chip size="small" color="info" label="Em tratativa" />}
             <Button size="small" variant="outlined" onClick={() => onShowEvent(event.id)}>
@@ -1099,6 +1177,7 @@ function EventList({
         </ListItem>
       ))}
     </List>
+    </>
   );
 }
 
