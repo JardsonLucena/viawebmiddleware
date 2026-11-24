@@ -1231,7 +1231,17 @@ function ClientsView({
     setSaving(true);
     setFormError("");
     try { await operation(); }
-    catch { setFormError("Não foi possível concluir a operação. Confira os dados e a conexão."); }
+    catch (error) {
+      const response = (error as { response?: { status?: number; data?: { error?: unknown } } }).response;
+      const detail = response?.data?.error;
+      if ((response?.status && response.status < 500) || response?.status === 503) {
+        setFormError(typeof detail === "string" ? detail : "O servidor recusou a operação.");
+      } else {
+        setFormError(response
+          ? "Falha no servidor. Confira os logs e se a migração do banco foi aplicada."
+          : "Não foi possível acessar o servidor. Confira a conexão.");
+      }
+    }
     finally { setSaving(false); }
   };
 
