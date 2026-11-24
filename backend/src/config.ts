@@ -13,6 +13,7 @@ const envBoolean = z.preprocess((value) => {
 const envSchema = z.object({
   STORAGE_MODE: z.enum(["postgres", "memory"]).default("postgres"),
   DATABASE_URL: z.string().optional(),
+  CENTRAL_CREDENTIAL_KEY_HEX: z.string().regex(/^[a-fA-F0-9]{64}$/).optional(),
   PORT: z.coerce.number().default(3333),
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
   ISS_BASE_URL: z.string().url().default("http://127.0.0.1:8888"),

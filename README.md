@@ -229,6 +229,36 @@ Confira o historico antes de repetir uma operacao com falha de conexao.
 
 # Servico Windows
 
+## Senhas centralizadas
+
+Use STORAGE_MODE=postgres para persistir senhas entre reinicios.
+Gere uma chave uma unica vez:
+
+```powershell
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+Adicione o resultado ao backend/.env como CENTRAL_CREDENTIAL_KEY_HEX.
+Preserve a chave junto ao backup do banco. Alterar a chave impede a leitura
+das senhas gravadas anteriormente.
+
+Com o servico parado, aplique a atualizacao:
+
+```powershell
+npm install
+npm exec --workspace backend -- prisma migrate deploy
+npm run prisma:generate
+npm run build
+Start-Service ViawebMiddleware
+```
+
+Em Clientes, salve novamente a senha de cada central. Todos os viewers do
+mesmo backend utilizam a credencial centralizada. A API guarda a senha com
+AES-256-GCM e informa apenas se existe senha cadastrada. Senhas antigas do
+navegador nao sao migradas automaticamente. Em STORAGE_MODE=memory, as
+senhas sao perdidas ao reiniciar. As rotas administrativas seguem o controle
+de acesso atual da instalacao.
+
 O instalador em `scripts/install-windows-service.ps1` usa WinSW 2.x.
 Baixe `WinSW-x64.exe` da distribuicao oficial
 <https://github.com/winsw/winsw/releases/tag/v2.12.0>.

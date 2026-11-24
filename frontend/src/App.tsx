@@ -426,16 +426,10 @@ function App({ dark, onToggleTheme }: { dark: boolean; onToggleTheme: () => void
   };
 
   const sendCentralPartitionCommand = async (isep: string, cmd: "armar" | "desarmar", partition: number) => {
-    const password = localStorage.getItem(`centralCommandPassword:${isep}`);
-    if (!password) {
-      setCentralStatusMessage(`Cadastre a senha de controle remoto da central ${isep} na aba Clientes.`);
-      return;
-    }
     setCentralStatusLoading(isep);
     try {
       await receiverCommand(isep, {
         cmd,
-        password,
         particoes: [partition]
       });
       setCentralStatusMessage(`${cmd === "armar" ? "Arme" : "Desarme"} enviado para ${isep} / P${partition}.`);
@@ -443,7 +437,8 @@ function App({ dark, onToggleTheme }: { dark: boolean; onToggleTheme: () => void
         refreshCentralStatus(isep).catch((error) => setCentralStatusMessage(error.message));
       }, 1800);
     } catch (error) {
-      setCentralStatusMessage(error instanceof Error ? error.message : String(error));
+      const response = (error as { response?: { data?: { error?: string } } }).response;
+      setCentralStatusMessage(response?.data?.error ?? (error instanceof Error ? error.message : String(error)));
       setCentralStatusLoading("");
     }
   };
@@ -1220,7 +1215,6 @@ function ClientsView({
   const [partitionCameraForm, setPartitionCameraForm] = useState({ partition: "", camera_ids: "" });
   const [zoneCameraForm, setZoneCameraForm] = useState({ partition: "", zone: "", camera_ids: "" });
   const [commandPassword, setCommandPassword] = useState("");
-  const [passwordSaved, setPasswordSaved] = useState(false);
   const [editingUser, setEditingUser] = useState<AccountUser | null>(null);
   const [userSearch, setUserSearch] = useState("");
   const [selectedPartition, setSelectedPartition] = useState("1");
@@ -1243,6 +1237,7 @@ function ClientsView({
 
   const selectedCentral = buildings.find((central) => central.isep === selectedIsep) ?? buildings[0];
   const activeIsep = selectedCentral?.isep ?? "";
+  const passwordSaved = Boolean(selectedCentral?.has_command_password);
   const filteredPartitions = centralPartitions
     .filter((partition) => partition.isep === activeIsep)
     .sort((a, b) => Number(a.partition) - Number(b.partition));
@@ -1279,9 +1274,7 @@ function ClientsView({
 
   useEffect(() => {
     if (!activeIsep) return;
-    const savedPassword = localStorage.getItem(`centralCommandPassword:${activeIsep}`);
     setCommandPassword("");
-    setPasswordSaved(Boolean(savedPassword));
     setCommandResult("");
   }, [activeIsep]);
 
@@ -1585,27 +1578,24 @@ function ClientsView({
                       value={commandPassword}
                       onChange={(event) => setCommandPassword(event.target.value)}
                       size="small"
-                      helperText={passwordSaved ? "Senha salva neste navegador" : "Nenhuma senha salva neste navegador"}
+                      helperText={passwordSaved ? "Senha centralizada no servidor" : "Cadastre a senha para habilitar os viewers"}
                     />
-                    <Button variant="outlined" disabled={!commandPassword.trim()} onClick={() => {
-                      try {
-                        localStorage.setItem(`centralCommandPassword:${activeIsep}`, commandPassword.trim());
-                        setPasswordSaved(true);
+                    <Button variant="outlined" disabled={saving || !commandPassword.trim()} onClick={() => {
+                      void save(async () => {
+                        await api.put(`/buildings/${encodeURIComponent(activeIsep)}/password`, { password: commandPassword.trim() });
+                        try { localStorage.removeItem(`centralCommandPassword:${activeIsep}`); } catch {}
                         setCommandPassword("");
-                        setCommandResult("Senha de controle remoto salva.");
-                      } catch {
-                        setCommandResult("Não foi possível salvar a senha neste navegador.");
-                      }
+                        await onChanged();
+                        setCommandResult("Senha salva no servidor e disponível para todos os viewers.");
+                      });
                     }}>Salvar senha</Button>
-                    {passwordSaved && <Button onClick={() => {
-                      try {
-                        localStorage.removeItem(`centralCommandPassword:${activeIsep}`);
-                        setPasswordSaved(false);
+                    {passwordSaved && <Button disabled={saving} onClick={() => {
+                      void save(async () => {
+                        await api.delete(`/buildings/${encodeURIComponent(activeIsep)}/password`);
                         setCommandPassword("");
-                        setCommandResult("Senha removida deste navegador.");
-                      } catch {
-                        setCommandResult("Não foi possível remover a senha deste navegador.");
-                      }
+                        await onChanged();
+                        setCommandResult("Senha removida do servidor.");
+                      });
                     }}>Remover senha salva</Button>}
                     <Button variant="outlined" startIcon={<Refresh />} disabled={!activeIsep || loadingIsep === activeIsep} onClick={() => {
                       refreshPartitionStatus().catch((error) => setCommandResult(error.message));

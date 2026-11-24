@@ -161,6 +161,7 @@ export type AccountUserRecord = AccountUserInput & {
 };
 
 export type BuildingRecord = BuildingInput & {
+  command_password_encrypted?: string | null;
   id: number;
   created_at: Date;
   updated_at: Date;
@@ -220,6 +221,7 @@ interface DataStore {
   findUserByIsep(isep: string, partition: string, userNumber: string): Promise<AccountUserRecord | null>;
   listBuildings(): Promise<BuildingRecord[]>;
   upsertBuilding(input: BuildingInput): Promise<BuildingRecord>;
+  setCentralPassword(isep: string, encrypted: string | null): Promise<boolean>;
   deleteBuilding(isep: string): Promise<boolean>;
   findBuildingByIsep(isep: string): Promise<BuildingRecord | null>;
   listCentralPartitions(): Promise<CentralPartitionRecord[]>;
@@ -252,6 +254,12 @@ interface DataStore {
 }
 
 class PrismaDataStore implements DataStore {
+  async setCentralPassword(isep: string, encrypted: string | null) {
+    const result = await (prisma as any).building.updateMany({
+      where: { isep }, data: { command_password_encrypted: encrypted }
+    });
+    return result.count > 0;
+  }
   async deleteBuilding(isep: string) {
     return prisma.$transaction(async (tx) => {
       const removed = await tx.building.deleteMany({ where: { isep } });
@@ -653,6 +661,12 @@ class PrismaDataStore implements DataStore {
 }
 
 class MemoryDataStore implements DataStore {
+  async setCentralPassword(isep: string, encrypted: string | null) {
+    const building = await this.findBuildingByIsep(isep);
+    if (!building) return false;
+    building.command_password_encrypted = encrypted;
+    return true;
+  }
   async deleteBuilding(isep: string) {
     const index = this.buildings.findIndex((building) => building.isep === isep);
     if (index === -1) return false;

@@ -32,6 +32,7 @@ export type AccountUser = {
 };
 
 export type Building = {
+  has_command_password?: boolean;
   id: number;
   isep: string;
   building_number?: string;
