@@ -21,8 +21,28 @@ server.listen(config.PORT, () => {
   console.log(`Viaweb Show Cam API listening on http://localhost:${config.PORT}`);
 });
 
-process.on("SIGINT", async () => {
-  viawebReceiverClient.stop();
-  await dataStore.disconnect();
-  server.close(() => process.exit(0));
-});
+let stopping = false;
+async function shutdown(signal: string) {
+  if (stopping) return;
+  stopping = true;
+  console.log(`Stopping VIAWEB middleware (${signal}).`);
+  const deadline = setTimeout(() => {
+    console.error("Shutdown exceeded 10 seconds; forcing process exit.");
+    process.exit(1);
+  }, 10000);
+  try {
+    viawebReceiverClient.stop();
+    await new Promise<void>((resolve) => io.close(() => resolve()));
+    await dataStore.disconnect();
+    clearTimeout(deadline);
+    console.log("VIAWEB middleware stopped.");
+    process.exit(0);
+  } catch (error) {
+    console.error("Shutdown failed.", error);
+    process.exit(1);
+  }
+}
+
+process.on("SIGINT", () => { void shutdown("SIGINT"); });
+process.on("SIGTERM", () => { void shutdown("SIGTERM"); });
+process.on("SIGBREAK", () => { void shutdown("SIGBREAK"); });

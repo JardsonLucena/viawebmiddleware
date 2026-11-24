@@ -41,6 +41,7 @@ $configuration = @"
   <env name="NODE_ENV" value="production"/>
   <startmode>Automatic</startmode>
   <delayedAutoStart>true</delayedAutoStart>
+  <stoptimeout>15 sec</stoptimeout>
   <onfailure action="restart" delay="15 sec"/>
   <logpath>$logXml</logpath>
   <log mode="roll-by-size">

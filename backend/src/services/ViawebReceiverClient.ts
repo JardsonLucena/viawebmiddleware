@@ -30,6 +30,7 @@ type PendingCommand = {
 
 export class ViawebReceiverClient {
   private socket?: net.Socket;
+  private stopped = true;
   private reconnectTimer?: NodeJS.Timeout;
   private plaintextBuffer = "";
   private encryptedBuffer = Buffer.alloc(0);
@@ -53,10 +54,13 @@ export class ViawebReceiverClient {
 
   start() {
     if (!config.VIAWEB_RECEIVER_ENABLED) return;
+    this.stopped = false;
     this.connect();
   }
 
   stop() {
+    this.stopped = true;
+    this.connected = false;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.socket?.destroy();
     for (const [id, pending] of this.pendingCommands) {
@@ -165,13 +169,14 @@ export class ViawebReceiverClient {
         pending.reject(new Error(`Command ${id} cancelled because Receiver connection closed`));
       }
       this.pendingCommands.clear();
+      if (this.stopped) return;
       console.warn("VIAWEB Receiver socket closed; reconnecting soon.");
       this.scheduleReconnect();
     });
   }
 
   private scheduleReconnect() {
-    if (!config.VIAWEB_RECEIVER_ENABLED) return;
+    if (this.stopped || !config.VIAWEB_RECEIVER_ENABLED) return;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = setTimeout(() => this.connect(), config.VIAWEB_RECONNECT_MS);
   }
